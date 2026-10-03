@@ -25,6 +25,11 @@ do not invent answers to choices or infer an unbound merge/deployment approval.
 Use internal communication for progress and superseded confirmations that are
 already being revised. Execution facts do not authorize replay of past actions.
 
+Choose technical details and reversible experience defaults autonomously. Ask for
+real business, privacy, cost or irreversible tradeoffs with meaningful alternatives
+and a recommendation. Keep facts, plan points and execution authorization distinct.
+Preserve confirmed answers; a stale document label alone does not reopen a decision.
+
 <!-- project-workflow:controller:v1:begin -->
 ## Shared branch closeout convention
 
