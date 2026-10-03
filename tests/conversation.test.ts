@@ -208,3 +208,36 @@ test('A plan_ready result with unresolved questions asks them together before of
   assert.equal(x.task().state,'WAITING_INPUT');const m=x.store.mails().at(-1)!;assert.equal(m.questions!.length,2);assert.ok(m.questions!.every(q=>q.kind==='open'));assert.equal(m.approvalBinding,undefined);
  }finally{await x.cleanup();}
 });
+
+test('Accepted edits plus future requirements keep one queued revision and an internal receipt only',async()=>{
+ const x=await fixture();try{
+  const original=x.store.mails();
+  x.set({items:[item('edit','feedback','简化编辑交互'),item('later','future','将来支持分页')],questions:[]});
+  const mail=x.incoming('简化编辑交互，将来支持分页');x.controller.handle(mail);x.controller.handle(mail);await x.controller.startNext();
+  assert.deepEqual(x.store.mails(),original);assert.equal(x.pending().length,1);
+  assert.deepEqual(x.task().conversation!.records.map(r=>r.status),['queued','done']);assert.equal(x.task().conversation!.requests[0].text,'将来支持分页');
+  const receipts=x.store.db.prepare("SELECT data FROM events WHERE event='notification_internal'").all().map(row=>JSON.parse(String(row.data)));
+  assert.equal(receipts.length,1);assert.equal(receipts[0].kind,'reply-receipt');assert.match(receipts[0].text,/将来支持分页/);assert.equal(receipts[0].stageId,'stage-1');
+ }finally{await x.cleanup();}
+});
+test('Natural approval and future request queue one merge without an extra confirmation email',async()=>{
+ const x=await fixture();try{
+  const original=x.store.mails();x.set({items:[item('merge','approve','同意合并'),item('later','future','合并后规划缓存','规划缓存',['merge'])],questions:[]});
+  await x.run('同意合并，合并后规划缓存');assert.deepEqual(x.store.mails(),original);assert.deepEqual(x.pending().map(j=>j.kind),['merge']);
+  assert.equal(x.task().conversation!.records[1].status,'waiting');
+ }finally{await x.cleanup();}
+});
+test('Natural status sends one response; mixed unresolved questions are included in that response',async()=>{
+ const x=await fixture();try{
+  x.set({items:[item('status','status','看看状态')],questions:[]});await x.run('看看状态');
+  assert.equal(x.store.mails().length,2);assert.equal(x.store.mails().at(-1)!.kind,'status');assert.match(x.store.mails().at(-1)!.text,/WAITING_REVIEW/);
+  x.set({items:[item('status','status','看看状态'),{...item('edit','feedback','另一个修改'),clear:false}],questions:[{text:'具体要改哪个界面？',kind:'open',dependsOn:[]}]});await x.run('看看状态，另一个修改');
+  assert.equal(x.store.mails().length,3);const reply=x.store.mails().at(-1)!;assert.match(reply.text,/WAITING_REVIEW/);assert.match(reply.text,/具体要改哪个界面/);assert.ok(reply.questions!.some(q=>q.text==='具体要改哪个界面？'));assert.ok(reply.questions!.every(q=>q.kind==='open'));
+ }finally{await x.cleanup();}
+});
+test('Future requirements alone stay durable without emailing a receipt or authorizing implementation',async()=>{
+ const x=await fixture();try{
+  const original=x.store.mails();const binding=currentBinding(x.task());x.set({items:[item('later','future','下一阶段增加搜索')],questions:[]});await x.run('下一阶段增加搜索');
+  assert.deepEqual(x.store.mails(),original);assert.deepEqual(currentBinding(x.task()),binding);assert.equal(x.pending().length,0);assert.equal(x.task().conversation!.requests.length,1);
+ }finally{await x.cleanup();}
+});

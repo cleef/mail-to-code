@@ -168,6 +168,14 @@ implemented.
 
 Email a description of the project and requested change. Explicit routing is also supported with `NEW <project>:`. Reply to the latest proposal with `START`, then reply to the latest Review with `APPROVE`. Deployment uses a separate `DEPLOY <project>` confirmation after merge.
 
+**Email notifications:** messages are sent when you need to answer a question,
+confirm a plan/Review/deployment, handle a blocker, or receive a final result.
+New-task acknowledgements, accepted feedback (including future requests), queued
+work, automatic reanalysis and document-stage merge progress are recorded in the
+private SQLite event log instead. A feedback reply produces one revised proposal
+or Review, without a separate success receipt. An explicit `STATUS` request gets
+one status response. Each new stage still needs a fresh `START`.
+
 `STATUS`, `CANCEL` and `RETRY` are available in the task thread. Uncertain sends, merges or deployments require reconciliation; they are not automatically retried. Old or quoted approvals cannot authorize a new version.
 
 See [configuration](docs/configuration.md), [operations and migration](docs/operations.md), and [validation](docs/validation.md).

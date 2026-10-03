@@ -61,7 +61,7 @@ export class Controller {
         if(action.type!=='new'){this.store.remember(incoming.id,incoming.rfcId,incoming.threadId,undefined,'unrouted');return;}
         const taskId=this.store.newId(),productId=/^PRODUCT:\s*([A-Z][A-Z0-9_-]*-\d+)\s*$/mi.exec(incoming.text)?.[1];
         session={id:taskId,repo:action.repo,title:action.title,state:'QUEUED',subject:`[${taskId}] ${action.title}`,createdAt:new Date().toISOString(),initialMessageId:incoming.id,initialRfcId:incoming.rfcId,initialThreadId:incoming.threadId,summary:incoming.text,productId,blockedPhase:action.run?'develop':'plan',cancellationEpoch:0,revision:0};
-        this.store.save(session);this.store.notify(session,'ack',`已收到 ${taskId}：${action.title}\n${action.run?'直接开发并生成截图。':'先分析方案；收到方案后回复 START 开始开发。'}\n回复 STATUS 查询状态，CANCEL 取消。`);
+        this.store.save(session);this.store.recordProgress(session,'ack',`已收到 ${taskId}：${action.title}\n${action.run?'直接开发并生成截图。':'先分析方案；收到方案后回复 START 开始开发。'}\n回复 STATUS 查询状态，CANCEL 取消。`);
         this.store.enqueue(session,action.run?'develop':'plan',incoming.text);
       }else if(action.type==='invalid'){this.store.notify(session,'help',action.reason);}
       else if(action.type==='feedback')this.feedback(session,action.text);
@@ -137,7 +137,7 @@ export class Controller {
         if(!s.reviewSha||!s.prNumber)throw new Error('Missing reviewed PR');
         const local=await import('./git.js').then(m=>m.git(s.worktree!,['rev-parse','HEAD'],{signal}));if(local!==s.reviewSha)throw new Error('Review head changed');alive();
         try{s.mergeSha=await this.work.merge(s,signal);}catch(e){alive();if(safeError(e)==='BASE_ADVANCED'){
-          s.state='QUEUED';s.reviewNotice=undefined;this.store.save(s);this.store.enqueue(s,'develop','主分支已推进，请合入最新主分支并重新验证，保留当前功能；生成新的 Review。');this.store.notify(s,'status','主分支已推进；重新测试、截图和 Review 后再批准。');job.status='done';this.store.saveJob(job);this.store.run(job.id,s.id,{...runInfo,status:'revalidate',finishedAt:new Date().toISOString()});return;
+          s.state='QUEUED';s.reviewNotice=undefined;this.store.save(s);this.store.enqueue(s,'develop','主分支已推进，请合入最新主分支并重新验证，保留当前功能；生成新的 Review。');this.store.recordProgress(s,'revalidation','主分支已推进；重新测试、截图和 Review 后再批准。');job.status='done';this.store.saveJob(job);this.store.run(job.id,s.id,{...runInfo,status:'revalidate',finishedAt:new Date().toISOString()});return;
         }throw e;}
         alive();s.state='MERGED';s.summary=`已合并 ${s.prUrl}\n提交：${s.mergeSha}`;
         s.mergeNotice=this.store.notify(s,'merge',`${s.summary}\n生产尚未发布。要发布这个提交，请直接回复 DEPLOY。`).id;save();
