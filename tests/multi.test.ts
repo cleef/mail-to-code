@@ -458,3 +458,12 @@ test('Controller learns verified Chinese mapping during analysis and promotes it
     assert.equal(memory.inspect().projects[0].confidence,'confirmed');assert.equal(memory.inspect().projects.length,1);
   }finally{await x.cleanup();}
 });
+
+test('Multi-project intake is silent until its actionable plan or requested status',async()=>{
+ const x=await fixture();try{
+  x.controller.handle(x.message('PROJECTS: one','','NEW one: synthetic task'));assert.equal(x.store.mails().length,0);await x.flush();
+  const events=x.store.db.prepare("SELECT data FROM events WHERE event='notification_internal'").all().map(row=>JSON.parse(String(row.data)));assert.equal(events[0].kind,'ack');
+  x.controller.handle(x.message('STATUS'));await x.flush();assert.deepEqual(x.store.mails().map(m=>m.kind),['status']);
+  await x.controller.startNext();assert.equal(x.s().state,'WAITING_START');assert.deepEqual(x.store.mails().map(m=>m.kind),['status','plan']);assert.equal(x.store.mail(x.s().planNotice!)!.approvalBinding!.action,'START');
+ }finally{await x.cleanup();}
+});

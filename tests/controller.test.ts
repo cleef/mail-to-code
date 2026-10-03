@@ -59,7 +59,7 @@ test('backend-dependent result is blocked without review',async()=>{
   const x=await setup();try{x.work.run=async()=>({...result('blocked'),requiresBackend:true,summary:'需要数据库'});x.controller.handle(message('new','task'));await x.controller.startNext();assert.equal(x.session().state,'WAITING_INPUT');assert.equal(x.store.mails().some(m=>m.kind==='review'),false);}finally{await x.cleanup();}
 });
 test('uncertain send is reconciled, never automatically resent',async()=>{
-  const x=await setup();try{x.controller.handle(message('new','task'));let attempts=0;x.mail.send=async()=>{attempts++;throw new Error('network timeout');};await x.controller.flush();assert.equal(x.store.mails()[0].status,'uncertain');await x.controller.flush();assert.equal(attempts,1);
+  const x=await setup();try{x.controller.handle(message('new','task'));await x.controller.startNext();let attempts=0;x.mail.send=async()=>{attempts++;throw new Error('network timeout');};await x.controller.flush();assert.equal(x.store.mails()[0].status,'uncertain');await x.controller.flush();assert.equal(attempts,1);
     const out=x.store.mails()[0];x.mail.record({subject:x.session().subject,text:out.text,deliveryMarker:out.deliveryMarker},'existing');x.mail.search=async()=>[{id:'existing',threadId:'canonical'}] as never;out.identityCheckedAt=undefined;x.store.saveMail(out);await x.controller.flush();assert.equal(x.store.mails()[0].status,'sent');assert.equal(attempts,1);
   }finally{await x.cleanup();}
 });
@@ -67,7 +67,7 @@ test('history baseline skips old email; expired cursor performs bounded deduplic
   const x=await setup();try{let queries=0;x.mail.search=async()=>{queries++;return [];};await x.controller.poll();assert.equal(queries,0);assert.equal(x.store.get('gmail_history'),'100');x.mail.history=async()=>{throw new GmailError(404,'expired');};await x.controller.poll();assert.equal(queries,1);assert.equal(x.store.get('gmail_history'),'100');}finally{await x.cleanup();}
 });
 test('restart preserves work and marks interrupted effects for reconciliation',async()=>{
-  const x=await setup();try{x.controller.handle(message('new','task'));const s=x.session(),job=x.store.jobs()[0];job.kind='deploy';job.status='running';x.store.saveJob(job);s.state='DEPLOYING';s.deployUncertain=true;x.store.save(s);const mail=x.store.mails()[0];mail.status='sending';x.store.saveMail(mail);x.store.recover();assert.equal(x.session().deployUncertain,true);assert.equal(x.session().state,'FAILED');assert.equal(x.store.mails()[0].status,'uncertain');
+  const x=await setup();try{x.controller.handle(message('new','task'));const s=x.session(),job=x.store.jobs()[0];job.kind='deploy';job.status='running';x.store.saveJob(job);s.state='DEPLOYING';s.deployUncertain=true;x.store.save(s);const mail=x.store.notify(s,'status','Synthetic status requested by owner');mail.status='sending';x.store.saveMail(mail);x.store.recover();assert.equal(x.session().deployUncertain,true);assert.equal(x.session().state,'FAILED');assert.equal(x.store.mails()[0].status,'uncertain');
     x.controller.handle(message('retry','RETRY','','Re: '+x.session().subject));assert.equal(x.store.jobs().some(j=>j.status==='queued'),false);
   }finally{await x.cleanup();}
 });
@@ -97,3 +97,13 @@ test('CANCEL is allowed after merge, but rejected after the first production eff
 });
 
 test('Deleted history messages do not pin the cursor or prevent later trusted mail',async()=>{const x=await setup();try{x.store.set('gmail_history','100');x.mail.history=async()=>({messages:[{id:'gone',threadId:'gone-thread'},{id:'live',threadId:'incoming-thread'}],cursor:'110'}) as never;x.mail.read=async(id?:string)=>{if(id==='gone')throw new GmailError(404,'deleted');const raw=Buffer.from(`From: ${config.ownerAddress}\r\nTo: ${config.gmailAddress}\r\nSubject: NEW sampleapp: live\r\nMessage-ID: <live@qq.com>\r\nAuthentication-Results: mx.google.com; dkim=pass header.d=qq.com; dmarc=pass header.from=qq.com\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nlive requirement`).toString('base64url');return {id:'live',threadId:'incoming-thread',raw};};await x.controller.poll();assert.equal(x.store.get('gmail_history'),'110');assert.equal(x.store.seen('gone'),true);assert.equal(x.store.sessions().length,1);assert.equal(x.store.jobs()[0].kind,'plan');}finally{await x.cleanup();}});
+
+test('New requests record progress internally while requested status and the ready plan remain deliverable',async()=>{
+ const x=await setup();try{
+  x.controller.handle(message('new','task'));assert.equal(x.store.mails().length,0);await x.controller.flush();assert.equal(x.counts().sends,0);
+  const internal=x.store.db.prepare("SELECT data FROM events WHERE event='notification_internal'").all().map(row=>JSON.parse(String(row.data)));
+  assert.equal(internal[0].kind,'ack');assert.match(internal[0].text,/已收到/);
+  x.controller.handle(message('status','STATUS','','Re: '+x.session().subject));assert.equal(x.store.mails()[0].kind,'status');await x.controller.flush();assert.equal(x.counts().sends,1);
+  await x.controller.startNext();assert.equal(x.session().state,'WAITING_START');assert.deepEqual(x.store.mails().map(m=>m.kind),['status','plan']);assert.equal(x.store.mail(x.session().planNotice!)!.approvalBinding!.action,'START');
+ }finally{await x.cleanup();}
+});

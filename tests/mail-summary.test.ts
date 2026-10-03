@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {simpleParser} from 'mailparser';
 import {ConfigSchema} from '../src/config.js';
 import {GmailClient} from '../src/gmail.js';
@@ -42,4 +45,16 @@ test('Actual multipart MIME carries equivalent plain/table content plus unchange
  await client.send({to:config.ownerAddress,subject:'中文任务',text,summary,messageId:'<snapshot@mail-to-code.local>',inReplyTo:'<parent@gmail.com>',references:['<parent@gmail.com>'],deliveryMarker:marker,threadId:'thread'});
  const mime=await simpleParser(Buffer.from(wire.raw,'base64url'));assert.equal(mime.messageId,'<snapshot@mail-to-code.local>');assert.equal(mime.inReplyTo,'<parent@gmail.com>');assert.equal(mime.headers.get('x-mail-to-code-delivery'),marker);assert.equal(wire.threadId,'thread');
  assert.equal(mime.text?.trim(),(text+'\n\n[MAIL-REF: '+marker+']').trim());assert.ok(String(mime.html).includes('<table'));assert.equal((String(mime.html).match(/Feature name\(description\)/g)||[]).length,1);assert.match(String(mime.html),/等待 START/);
+});
+
+test('Internal progress persists across restart without entering the outbox or changing old mail snapshots',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'mail-internal-progress-')),path=join(directory,'state.sqlite');
+ let store=new Store(path);
+ try{
+  const s={id:'internal-task',repo:'app',title:'Synthetic progress',subject:'Synthetic progress',state:'QUEUED',createdAt:'now',initialMessageId:'in',initialRfcId:'<in@test>',initialThreadId:'thread',summary:'Queued',cancellationEpoch:0,revision:0} as Session;
+  store.save(s);const mail=store.notify(s,'status','Requested status');const snapshot=store.mail(mail.id)!;
+  store.recordProgress(s,'ack','Request accepted');store.recordProgress(s,'plan-stale','Reanalyzing automatically');store.close();store=new Store(path);store.recover();
+  assert.deepEqual(store.mails(),[snapshot]);const events=store.db.prepare("SELECT data FROM events WHERE event='notification_internal' ORDER BY seq").all().map(row=>JSON.parse(String(row.data)));
+  assert.deepEqual(events.map(e=>e.kind),['ack','plan-stale']);assert.match(events[0].summary.rows[0].status,/QUEUED/);
+ }finally{store.close();await rm(directory,{recursive:true,force:true});}
 });

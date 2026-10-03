@@ -64,7 +64,7 @@ test('Confirmed auto profiles update when main scripts change; old START and RUN
  }finally{await x.cleanup();}
  const y=await fixture();try{
   await y.publish(true);const p=await y.registry.resolve('mobile-app',{sync:true});y.registry.approve(y.registry.target(p));await y.publish(false);
-  y.controller.handle(y.message('直接开发','','NEW mobile-app RUN: task'));await y.controller.startNext();assert.equal(y.implemented(),0);assert.equal(y.current().state,'WAITING_INPUT');assert.match(y.store.mails().find(m=>m.kind==='run-plan')!.text,/RUN 未实施/);
+  y.controller.handle(y.message('直接开发','','NEW mobile-app RUN: task'));await y.controller.startNext();assert.equal(y.implemented(),0);assert.equal(y.current().state,'WAITING_INPUT');assert.equal(y.store.mails().some(m=>m.kind==='run-plan'),false);const internal=y.store.db.prepare("SELECT data FROM events WHERE event='notification_internal'").all().map(row=>JSON.parse(String(row.data)));assert.ok(internal.some(e=>e.kind==='run-plan'&&/RUN 未实施/.test(e.text)));
  }finally{await y.cleanup();}
 });
 test('Profile source keeps external/proposal/legacy values and source-only commit does not change auto version',async()=>{

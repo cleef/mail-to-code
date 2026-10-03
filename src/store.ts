@@ -53,6 +53,9 @@ export class Store {
   }
   saveJob(job: Job) { this.db.prepare('INSERT INTO jobs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data').run(job.id,job.sessionId,job.status,JSON.stringify(job)); }
   jobs(): Job[] { return this.all<Job>('jobs'); }
+  recordProgress(session: Session,kind: string,text: string) {
+    this.event(session.id,'notification_internal',{kind,text,stageId:session.workflow?.stageId,summary:createSummary(session)});
+  }
   notify(session: Session,kind: string,text: string,attachments: Attachment[]=[],options?:{binding?:ApprovalBinding;questions?:Omit<MailQuestion,'id'>[]}): Outbound {
     const marker=randomUUID();
     const mail: Outbound = {id:`<${marker}@mail-to-code.local>`,deliveryMarker:marker,sessionId:session.id,stageId:session.workflow?.stageId,kind,text,attachments,status:'pending',createdAt:new Date().toISOString(),attempts:0};

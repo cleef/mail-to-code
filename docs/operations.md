@@ -19,3 +19,18 @@ Preserve the old deployment and cutover backup for 30 days. Do not delete a stil
 Before the new controller performs any effects, the stopped cutover snapshot can restore the old installation. After startup, inspect processed mail, outbox and external operations first. Prefer a tested build compatible with the current database and profile format, keeping the current database. Never restore an earlier snapshot blindly, replay historical approvals, or run a v5 controller against v6 state.
 
 `reconcile-send`, `reconcile-merge` and `reconcile-deploy` resolve uncertain outcomes. Read their CLI output before retrying. `upgrade.sh` backs up and checks a reviewed revision; `rollback.sh` checks schema compatibility and never restores a database automatically. Format-specific compatibility still requires testing on a private database copy.
+
+## Internal progress records
+
+Intermediate notifications are stored as `notification_internal` events in the
+private SQLite `events` table, with their kind, text, stage and summary snapshot.
+They are not outbox entries, cannot be sent by `flush`, and do not replace an
+approval notice. Reply item status and dependencies remain in each task's
+conversation ledger. No schema migration is needed, and existing mail snapshots
+and delivery identities remain unchanged.
+
+Document-stage merges are followed by read-only analysis; its next proposal,
+question or completion is the next email. Code merge notices that authorize a
+separate deployment, cancellation results, failures and requested status replies
+remain visible to the owner. Automatic reanalysis invalidates old approval
+bindings immediately, even though the intermediate status is internal.

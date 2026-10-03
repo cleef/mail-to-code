@@ -16,6 +16,7 @@ const fingerprint = (t: RepoExecution) => digest({ profile: t.profile, baseBranc
 export function manifest(s: Session) { return digest({ ...stageBinding(s), documents: s.documentVersion, order: s.mergeOrder, references:(s.references||[]).map(t=>({identity:t.identity,base:t.baseSha,profile:t.profileVersion})), targets: s.targets!.map(t => ({ identity: t.identity,...(s.workflow&&!s.workflow.legacy?{mode:t.auxiliary?'evidence':'model',evidence:!!t.recordEvidence}:{}), profile: t.profileVersion, base: t.baseSha, head: t.reviewSha, pr: t.prNumber, checks: t.checks, pending: t.pendingChecks, merged: t.mergeSha, deploy: t.deployment })) }); }
 export class MultiController extends Controller {
     private collectedHelp?:string[];
+    private collectedStatus?:string[];
     private intentActive?: {job:Job;abort:AbortController;promise:Promise<void>};
     private multiActive?: {
         job: Job;
@@ -82,7 +83,7 @@ export class MultiController extends Controller {
                           summary:incoming.text||action.title,originalRequest:incoming.subject+'\n'+incoming.text,explicitProductId,productId:explicitProductId,projectHints:hints,targets:[],references:[],mergeOrder:[],directRunRequested:action.run,blockedPhase:'plan',cancellationEpoch:0,revision:0};
                         ensureWorkflow(s);
                         this.store.save(s);
-                        this.store.notify(s,'ack',`已收到 ${taskId}：${action.title}\n先只读探索相关项目并返回方案，回复最新方案 START 后开发。${action.run?'\nRUN 将先核对精确项目及已确认配置；未接入时仍返回方案。':''}\n回复 STATUS 或 CANCEL。`);
+                        this.store.recordProgress(s,'ack',`已收到 ${taskId}：${action.title}\n先只读探索相关项目并返回方案，回复最新方案 START 后开发。${action.run?'\nRUN 将先核对精确项目及已确认配置；未接入时仍返回方案。':''}\n回复 STATUS 或 CANCEL。`);
                         this.store.enqueue(s,'plan',incoming.text||action.title);
                     }
                 }
@@ -126,7 +127,8 @@ export class MultiController extends Controller {
     private control(s: Session, command: string, reply: string, project?: string) {
         const refuse = (v: string) => this.help(s,v);
         if (command === 'STATUS') {
-            this.store.notify(s,'status',s.lastError?`当前阻塞：${s.lastError}`:`当前状态：${s.state}。${s.mailBrief?.changes.length?'最近变化见下方。':'暂无新的阶段变化。'}`);
+            const text=s.lastError?`当前阻塞：${s.lastError}`:`当前状态：${s.state}。${s.mailBrief?.changes.length?'最近变化见下方。':'暂无新的阶段变化。'}`;
+            if(this.collectedStatus)this.collectedStatus.push(text);else this.store.notify(s,'status',text);
             return;
         }
         if (command === 'CANCEL') {
@@ -215,7 +217,7 @@ export class MultiController extends Controller {
                 s.state = 'QUEUED';
                 this.store.save(s);
                 this.store.enqueue(s, 'develop', '__REVALIDATE__');
-                refuse('合并批准已失效；重新验证剩余 PR 后发送新 Review。');
+                this.store.recordProgress(s,'revalidation','合并批准已失效；重新验证剩余 PR 后发送新 Review。');
                 return;
             }
             this.store.enqueue(s, s.failedKind==='develop'&&s.blockedPhase==='plan'?'plan':s.failedKind, s.failedKind === 'deploy' ? s.deployTarget! : s.summary);
@@ -283,16 +285,19 @@ export class MultiController extends Controller {
             const record:ReplyRecord={id,source:context.incoming.id,stageId:context.stageId,item:structuredClone(item),dependencies:referenced.flatMap(q=>q.dependsOn),binding,status:reason?'blocked':'accepted',reason};c.records.push(record);
             if(reason&&!questions.some(q=>q.text===reason))questions.push({text:reason,kind:'open',dependsOn:[]});
         }
-        this.store.save(s);this.collectedHelp=[];
-        try{this.advanceReplies(s);}finally{const notes=this.collectedHelp;this.collectedHelp=undefined;
+        this.store.save(s);this.collectedHelp=[];this.collectedStatus=[];
+        try{this.advanceReplies(s);}finally{const notes=this.collectedHelp,statuses=this.collectedStatus!;this.collectedHelp=undefined;this.collectedStatus=undefined;
             const fresh=this.store.session(s.id)!;
             const records=fresh.conversation!.records.filter(r=>r.source===context.incoming.id);
             for(const r of records.filter(r=>r.status==='blocked'))if(!questions.length){const b=currentBinding(fresh);const action=r.item.action.toUpperCase();questions.push(b&&b.action===action?{text:action==='START'?'确认按更新后的当前方案实施':action==='APPROVE'?'确认合并当前有效 Review 的完整清单':'请指定要发布的已合并项目',kind:action==='DEPLOY'?'choice':'confirm',action:b.action,dependsOn:[]}:{text:r.reason||'请补充该事项的处理要求',kind:'open',dependsOn:[]});}
             const lines=records.map((r,n)=>`${n+1}. ${r.item.text||r.item.evidence}：${r.status==='queued'?'已批准并排队':r.status==='waiting'?'等待前置事项完成':r.status==='done'?'已处理':r.status==='blocked'?'待澄清':'已保留'}${r.reason?'（'+r.reason+'）':''}`);
-            // Successful edits will return their revised plan/Review. Send an
-            // immediate reply only when there is a question or another action.
-            const feedbackOnly=records.length>0&&records.every(r=>r.item.action==='feedback'&&['queued','waiting'].includes(r.status))&&!questions.length&&!notes.length;
-            if(!feedbackOnly)this.help(fresh,[...lines,...notes.filter(n=>!lines.some(l=>l.includes(n)))].join('\n')||'本次回复尚有未决事项。',questions,context.incoming.id);
+            // Accepted controls, edits and future requests are durable internal
+            // receipts. Only unresolved questions or actionable/final outcomes
+            // need an immediate email; requested STATUS joins the same reply.
+            const receipt=[...lines,...notes.filter(n=>!lines.some(l=>l.includes(n)))].join('\n');
+            this.store.recordProgress(fresh,'reply-receipt',receipt);
+            if(questions.length||notes.length)this.help(fresh,[receipt,...statuses].filter(Boolean).join('\n')||'本次回复尚有未决事项。',questions,context.incoming.id);
+            else if(statuses.length)this.store.notify(fresh,'status',statuses.join('\n'));
         }
     }
     private advanceReplies(s:Session){
@@ -473,19 +478,19 @@ export class MultiController extends Controller {
                         const targets=[];for(const hint of s.projectHints){if(!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(hint))throw new Error('RUN requires exact aliases');const p=await this.multiWork.prepareProject(hint,this.registry,signal);if(!p.ready)throw new Error('Profile not confirmed');targets.push(this.registry.target(p));}
                         if(s.productId){const p=await this.multiWork.prepareProject(this.config.productDocs,this.registry,signal);if(!p.ready)throw new Error('Product profile not confirmed');if(!targets.some(t=>t.identity===p.identity))targets.push({...this.registry.target(p),auxiliary:true});}
                         s.targets=targets;s.repo=targets[0].projectId;s.mergeOrder=targets.map(t=>t.projectId);s.profileVersions=Object.fromEntries(targets.map(t=>[t.projectId,t.profileVersion]));save();job.kind='develop';this.store.saveJob(job);
-                    }catch{save();this.store.notify(s,'run-plan','RUN 未实施：需要确认项目或接入配置，将发送新方案。');}
+                    }catch{save();this.store.recordProgress(s,'run-plan','RUN 未实施：需要确认项目或接入配置，将发送新方案。');}
                 }
                 if(job.kind==='plan'){await this.analyzePlan(s,job,signal,save,alive);job.status='done';this.store.saveJob(job);this.store.run(job.id,s.id,{kind:'plan',status:'done'});return;}
             }
             if(s.pendingStart){
                 try{await this.multiWork.verifyPlan(s,this.registry,signal);alive();for(const t of s.targets!)this.registry.approve(t);s.pendingStart=false;if(s.workflow){s.workflow.confirmed=true;s.workflow.confirmedPlan=s.summary;}s.profileVersions=Object.fromEntries(s.targets!.map(t=>[t.projectId,t.profileVersion]));save();}
-                catch(e){alive();s.pendingStart=false;s.planNotice=undefined;s.state='QUEUED';s.blockedPhase='plan';save();this.store.enqueue(s,'plan',s.summary+'\nSTART 核对失败：'+safeError(e));this.store.notify(s,'plan-stale',safeError(e)+'\n已重新分析；旧 START 失效，请等待新方案。');job.status='done';this.store.saveJob(job);return;}
+                catch(e){alive();s.pendingStart=false;s.planNotice=undefined;s.state='QUEUED';s.blockedPhase='plan';save();this.store.enqueue(s,'plan',s.summary+'\nSTART 核对失败：'+safeError(e));this.store.recordProgress(s,'plan-stale',safeError(e)+'\n已重新分析；旧 START 失效，请等待新方案。');job.status='done';this.store.saveJob(job);return;}
             }
             await this.registry.refresh([...(s.targets||[]),...(s.references||[])],{sync:true,signal});
             if(job.kind==='develop'&&!s.targets?.some(t=>t.mergeSha)&&[...(s.targets||[]),...(s.references||[])].some(t=>this.registry.changed(t))){
                 s.state='QUEUED';s.blockedPhase='plan';s.reviewNotice=undefined;s.planNotice=undefined;save();
                 this.store.enqueue(s,'plan',job.feedback+'\n配置已变化，重新分析并等待新 START。');
-                this.store.notify(s,'plan-stale','项目配置或参考范围已变化，旧批准失效，正在重新分析。');
+                this.store.recordProgress(s,'plan-stale','项目配置或参考范围已变化，旧批准失效，正在重新分析。');
                 job.status='done';this.store.saveJob(job);return;
             }
             this.assertReferences(s);
@@ -523,7 +528,12 @@ export class MultiController extends Controller {
                 s.state = 'MERGED';
                 s.partialMerge = false;
                 s.summary = s.targets!.map(t => `${t.projectId}: ${t.prUrl}\nMerged commit: ${t.mergeSha}`).join('\n\n');
-                s.mergeNotice = this.store.notify(s, 'merge', `${s.workflow?.proposal?.kind==='documentation'?'文档阶段已合并，接下来仅只读分析下一步；请等待新方案，新阶段需要新的 START。':`发布需单独回复 ${s.targets!.length > 1 ? 'DEPLOY <项目别名>' : 'DEPLOY'}；仅启用的目标可发布。`}`).id;
+                if(s.workflow?.proposal?.kind==='documentation'){
+                    s.mergeNotice=undefined;
+                    this.store.recordProgress(s,'merge','文档阶段已合并，接下来只读分析下一步；新阶段需要新的 START。');
+                }else{
+                    s.mergeNotice=this.store.notify(s,'merge',`发布需单独回复 ${s.targets!.length > 1 ? 'DEPLOY <项目别名>' : 'DEPLOY'}；仅启用的目标可发布。`).id;
+                }
                 save();
             }
             else if (job.kind === 'deploy') {
@@ -566,7 +576,7 @@ export class MultiController extends Controller {
                     if(this.registry.changed(t)){
                         s.state='QUEUED';s.blockedPhase='plan';s.planNotice=undefined;s.reviewNotice=undefined;save();
                         this.store.enqueue(s,'plan',job.feedback+'\n同步后的执行配置变化；已有 worktree 和会话保留，需新 START。');
-                        this.store.notify(s,'plan-stale','主分支同步后配置变化，正在重新分析；旧批准失效。');
+                        this.store.recordProgress(s,'plan-stale','主分支同步后配置变化，正在重新分析；旧批准失效。');
                         job.status='done';this.store.saveJob(job);return;
                     }
                     const result: RunResult = revalidate || t.auxiliary && phase === 'develop' ? { outcome: 'implementation_ready', summary: revalidate ? '重新验证剩余仓库' : '回填产品证据', questions: [], requiresBackend: false, screenshotTargets: [] } : await this.multiWork.run(s, t, phase, `${job.feedback}\n\n确认仓库集合：${s.targets!.map(t => t.projectId).join(', ')}\n产品文档版本：${d.version}\n${d.text}`, signal, id => { alive(); t.thread = id; save(); });
@@ -587,7 +597,7 @@ export class MultiController extends Controller {
                         s.blockedPhase = 'plan';
                         save();
                         this.store.enqueue(s,'plan',job.feedback+'\n需要参考或修改的其他仓库：'+result.requestedProjects.join(', '));
-                        this.store.notify(s,'scope','需要增加仓库，已回到只读分析；等待新方案并回复 START，不会扩大当前写权限。');
+                        this.store.recordProgress(s,'scope','需要增加仓库，已回到只读分析；等待新方案并回复 START，不会扩大当前写权限。');
                         break;
                     }
                     if (['blocked', 'needs_input'].includes(result.outcome)) {
