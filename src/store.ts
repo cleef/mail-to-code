@@ -55,12 +55,13 @@ export class Store {
   recordProgress(session: Session,kind: string,text: string) {
     this.event(session.id,'notification_internal',{kind,text,stageId:session.workflow?.stageId,summary:createSummary(session)});
   }
-  notify(session: Session,kind: string,text: string,attachments: Attachment[]=[],options?:{binding?:ApprovalBinding;preserveBinding?:boolean;questions?:Omit<MailQuestion,'id'>[]}): Outbound {
+  notify(session: Session,kind: string,text: string,attachments: Attachment[]=[],options?:{binding?:ApprovalBinding;preserveBinding?:boolean;scopeChange?:import('./types.js').ScopeChange;questions?:Omit<MailQuestion,'id'>[]}): Outbound {
     const marker=randomUUID();
     const mail: Outbound = {id:`<${marker}@mail-to-code.local>`,deliveryMarker:marker,sessionId:session.id,stageId:session.workflow?.stageId,kind,text,attachments,status:'pending',createdAt:new Date().toISOString(),attempts:0};
     mail.summary=createSummary(session);
     const action=kind==='plan'?'START':kind==='review'?'APPROVE':kind==='merge'&&session.workflow?.proposal?.kind!=='documentation'?'DEPLOY':undefined;
     if(action){mail.approvalBinding={noticeId:mail.id,version:approvalVersion(session,action),action,stageId:session.workflow?.legacy?undefined:session.workflow?.stageId};mail.questions=[{id:mail.id+'/q1',kind:action==='DEPLOY'&&(session.targets?.length||0)>1?'choice':'confirm',text:action==='START'?'确认按本次方案实施':action==='APPROVE'?'确认合并本次 Review 的完整清单':'确认发布已合并版本（多项目请指定目标）',action,binding:mail.approvalBinding,dependsOn:[]}];}
+    if(options?.scopeChange)mail.scopeChange=structuredClone(options.scopeChange);
     if(options){mail.approvalBinding=options.preserveBinding?mail.approvalBinding:options.binding;mail.questions=options.questions?.map((q,n)=>({...q,binding:q.action===mail.approvalBinding?.action?mail.approvalBinding:q.binding,id:mail.id+'/q'+(n+1)}));}
     if(mail.summary){mail.presentation=createPresentation(session,mail,text,this.mails().filter(m=>m.sessionId===session.id&&m.stageId===mail.stageId).at(-1)?.presentation);mail.text=mail.presentation.text;}
     this.saveMail(mail); return mail;

@@ -30,6 +30,13 @@ real business, privacy, cost or irreversible tradeoffs with meaningful alternati
 and a recommendation. Keep facts, plan points and execution authorization distinct.
 Preserve confirmed answers; a stale document label alone does not reopen a decision.
 
+Use the approved repository inventory and structured scopeDecision for cross-project
+work. The controller advances all approved targets; mentioning their remaining work
+does not add scope. Only the current worktree is writable to preserve isolation.
+Identify known repositories by their supplied projectId and Git identity, never by
+description strings alone. New repositories and wider roles need a new plan/START;
+their proposals cannot grant access. Preserve genuine completion and blocker facts.
+
 <!-- project-workflow:controller:v1:begin -->
 ## Shared branch closeout convention
 

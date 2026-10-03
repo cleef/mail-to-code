@@ -1,3 +1,4 @@
+import {validateScope,ScopeResolutionError} from './scope.js';
 import { mkdir, writeFile, realpath } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { Controller, safeError } from './controller.js';
@@ -218,9 +219,9 @@ export class MultiController extends Controller {
         this.observe(s,[{code:'guard_rejected',text}]);
     }
     private input(s:Session,text:string,questions:QuestionInput[]){this.observe(s,[{code:'outcome',text}],{kind:'input',text,questions});}
-    private announce(s:Session,kind:string,text:string,attachments:import('./types.js').Attachment[]=[]){
+    private announce(s:Session,kind:string,text:string,attachments:import('./types.js').Attachment[]=[],scopeChange?:import('./types.js').ScopeChange){
         const action=kind==='plan'?'START':kind==='review'?'APPROVE':kind==='merge'&&s.workflow?.proposal?.kind!=='documentation'?'DEPLOY':undefined;
-        this.observe(s,[{code:'outcome',text}],{kind,text,attachments,action,version:action?approvalVersion(s,action):undefined});
+        this.observe(s,[{code:'outcome',text}],{kind,text,attachments,scopeChange,action,version:action?approvalVersion(s,action):undefined});
     }
     private communicate(s:Session,decision:SemanticDecision,context:ReplyContext){
         this.store.recordProgress(s,'semantic-decision',JSON.stringify({communication:decision.communication,nextStep:decision.nextStep,questions:decision.questions}));
@@ -231,7 +232,7 @@ export class MultiController extends Controller {
         if(action&&candidate?.version!==approvalVersion(s,action))throw Error('REPLY_CONFIRMATION_STALE');
         const kind=action?candidate!.kind:decision.communication.kind==='requested_status'?(candidate?.kind==='projects'?'projects':'status'):decision.communication.kind==='final_result'?(candidate?.kind||'result'):(candidate&&['plan','review'].includes(candidate.kind)?'input':candidate&&['input','config-change','failure'].includes(candidate.kind)?candidate.kind:'help');
         const existing=currentBinding(s);
-        const mail=this.store.notify(s,kind,decision.communication.text,candidate?.attachments||[],{preserveBinding:!!action,binding:action?undefined:existing,questions:decision.questions.map(q=>({...q,dependsOn:q.dependsOn.map(id=>context.incoming.id+'/'+id),binding:q.action===existing?.action?existing:undefined}))});
+        const mail=this.store.notify(s,kind,decision.communication.text,candidate?.attachments||[],{preserveBinding:!!action,scopeChange:action==='START'?candidate?.scopeChange:undefined,binding:action?undefined:existing,questions:decision.questions.map(q=>({...q,dependsOn:q.dependsOn.map(id=>context.incoming.id+'/'+id),binding:q.action===existing?.action?existing:undefined}))});
         if(action){if(action==='START')s.planNotice=mail.id;else if(action==='APPROVE')s.reviewNotice=mail.id;else s.mergeNotice=mail.id;this.store.save(s);}
     }
     private applyCommand(s:Session,command:string,binding:ApprovalBinding|undefined,rawReply:string,project?:string){
@@ -469,7 +470,7 @@ export class MultiController extends Controller {
             s.planManifest=planManifest(s);save();
             if(missing.length){input(result.summary,['接入条件缺失：',...missing]);return;}
             await this.multiWork.verifyPlan(s,this.registry,signal);alive();
-            s.state='WAITING_START';this.announce(s,'plan',s.summary);save();return;
+            s.state='WAITING_START';this.announce(s,'plan',s.summary+(job.scopeChange?'\n范围变化：\n'+job.scopeChange.changes.join('\n')+'\n原因与影响：'+job.scopeChange.reason+'\n已有成果保留；新范围在本版本 START 后才可执行。':''),[],job.scopeChange);save();return;
         }
         input(s.summary,['分析连续改变项目或配置，尚未形成稳定方案，请补充范围。']);
     }
@@ -594,14 +595,20 @@ export class MultiController extends Controller {
                         this.announce(s, 'config-change', `执行配置需要变化；回复意见重新生成方案并 START，不沿用原配置批准。`);
                         break;
                     }
-                    if (result.requestedProjects?.some(alias => !s.targets!.some(t => t.projectId === alias))) {
-                        s.summary = summaries.join('\n\n');
-                        s.state = 'WAITING_INPUT';
-                        s.blockedPhase = 'plan';
-                        save();
-                        this.store.enqueue(s,'plan',job.feedback+'\n需要参考或修改的其他仓库：'+result.requestedProjects.join(', '));
-                        this.store.recordProgress(s,'scope','需要增加仓库，已回到只读分析；等待新方案并回复 START，不会扩大当前写权限。');
-                        break;
+                    const scope=await this.multiWork.resolveScope(s,t,result,signal);alive();
+                    if(scope){
+                        const changes=validateScope(s,scope);
+                        this.store.event(s.id,'scope_decision',{projectId:t.projectId,decision:scope.decision,reason:scope.reason,changes});
+                        if(scope.decision==='propose_scope_change'){
+                            s.summary=summaries.join('\n\n');s.state='WAITING_INPUT';s.blockedPhase='plan';save();
+                            const next=this.store.enqueue(s,'plan',job.feedback+'\nCodex 提出的真实范围变化：'+JSON.stringify(scope));
+                            next.scopeChange={reason:scope.reason,changes};this.store.saveJob(next);
+                            this.store.recordProgress(s,'scope','真实范围变化，正在只读规划；已有成果保留，新范围需新的 START。\n'+changes.join('\n'));break;
+                        }
+                        if(scope.decision==='need_context'){
+                            s.summary=summaries.join('\n\n');s.state='WAITING_INPUT';save();
+                            this.input(s,scope.reason,[...result.questions,...scope.questions]);break;
+                        }
                     }
                     if (['blocked', 'needs_input'].includes(result.outcome)) {
                         s.summary = summaries.join('\n\n');
@@ -676,6 +683,7 @@ export class MultiController extends Controller {
                 this.store.save(current);
                 this.store.enqueue(current, 'develop', '__REVALIDATE__');
             }
+            if(e instanceof ScopeResolutionError){this.store.recordProgress(current,'scope-invalid',current.lastError);return;}
             this.announce(current, 'failure', `${current.id}: ${current.lastError}\n${current.targets!.map(t => `${t.projectId}: ${t.mergeSha ? '已合并 ' + t.mergeSha : '尚未合并'}`).join('\n')}\n${job.kind === 'merge' ? '旧批准失效；先核对不确定结果，再 RETRY 重新验证并等待新 APPROVE。' : '修复条件后 RETRY，或回复补充意见。'}`);
         }
     }

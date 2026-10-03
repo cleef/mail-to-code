@@ -47,6 +47,18 @@ Use document versions and real confirmation records. Do not repeat a resolved
 question merely because a document still says it awaits confirmation. Changed
 scope or versions still require the appropriate fresh execution approval.
 
+Cross-repository development has one approved inventory with canonical project IDs,
+Git identities and roles. The controller executes each approved write target in
+turn and records product evidence after code work. A single writable worktree is
+an isolation boundary, not a request to re-authorize the remaining repositories.
+Use scopeDecision to distinguish work within that inventory, a real scope change,
+and missing human facts. Copy known IDs and identities; propose unknown repositories
+with relative directory clues. Describe changed roles and their impact explicitly.
+Existing-repository dependencies and evidence handoffs keep the current START.
+New repositories or wider roles require read-only planning and a fresh START.
+Scope interpretation never changes completion facts or bypasses independent checks.
+Invalid scope structure is an internal execution error, not a human decision.
+
 <!-- project-workflow:controller:v1:begin -->
 ## Shared branch closeout convention
 

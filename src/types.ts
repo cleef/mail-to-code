@@ -21,7 +21,7 @@ export interface Session {
   conversation?: { records: ReplyRecord[]; requests: {id:string;text:string;source:string;stageId?:string}[]; answered: string[] };
 }
 export interface ApprovalBinding { noticeId: string; version: string; action: 'START'|'APPROVE'|'DEPLOY'; stageId?:string; }
-export interface ReplyContext { mode?:'intake'|'outcome'; facts?:ExecutionFact[]; candidate?:{kind:string;text:string;questions?:QuestionInput[];sourceDecision?:SemanticDecision;attachments?:Attachment[];action?:ApprovalBinding['action'];version?:string}; snapshot?:string; incoming: Incoming; epoch: number; binding?: ApprovalBinding; command?: string; project?: string; result?: ReplyIntent | ReplyDecision; waitingForEarlier?:boolean; stageId?:string; parent?: {id:string;text:string;questions:MailQuestion[]}; previous?: {id:string;text:string;questions:MailQuestion[]}[]; }
+export interface ReplyContext { mode?:'intake'|'outcome'; facts?:ExecutionFact[]; candidate?:{kind:string;text:string;scopeChange?:ScopeChange;questions?:QuestionInput[];sourceDecision?:SemanticDecision;attachments?:Attachment[];action?:ApprovalBinding['action'];version?:string}; snapshot?:string; incoming: Incoming; epoch: number; binding?: ApprovalBinding; command?: string; project?: string; result?: ReplyIntent | ReplyDecision; waitingForEarlier?:boolean; stageId?:string; parent?: {id:string;text:string;questions:MailQuestion[]}; previous?: {id:string;text:string;questions:MailQuestion[]}[]; }
 export interface ReplyIntent { action:'start'|'feedback'|'status'|'cancel'|'retry'|'approve'|'deploy'|'clarify'; clear:boolean; evidence:string; feedback:string; project?:string; question:string; }
 export interface ReplyItem {id:string;action:ReplyIntent['action']|'future'|'catalog';clear:boolean;evidence:string;text:string;project?:string;questionRefs:string[];dependsOn:string[];}
 export interface QuestionProposal {text:string;kind:'confirm'|'choice'|'open';action?:'START'|'APPROVE'|'DEPLOY'|'future';dependsOn:string[];humanReason?:string;options?:{id:string;label:string;impact:string}[];recommendedOptionId?:string;recommendationReason?:string;}
@@ -32,11 +32,13 @@ export interface SemanticDecision extends ReplyDecision {version:2;nextStep:'wai
 export interface MailQuestion extends QuestionProposal {id:string;binding?:ApprovalBinding;}
 export interface ReplyRecord {id:string;source:string;stageId?:string;item:ReplyItem;binding?:ApprovalBinding;status:'accepted'|'waiting'|'queued'|'done'|'blocked';jobIds?:string[];dependencies?:string[];reason?:string;factReported?:boolean;revisionPhase?:'plan'|'develop';}
 export interface MailSummary {feature:string;rows:{phase:string;status:string;current:boolean;deliveries:{label:string;url?:string}[]}[];}
-export interface Job { id: string; sessionId: string; stageId?:string; kind: JobKind; feedback: string; reply?:ReplyContext; status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'; }
+export interface ScopeChange {reason:string;changes:string[];}
+export interface Job { id: string; sessionId: string; stageId?:string; kind: JobKind; feedback: string; scopeChange?:ScopeChange; reply?:ReplyContext; status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'; }
 export interface Attachment { path: string; filename: string; cid?: string; }
 export type MailBlock = {kind:'paragraph';title?:string;text:string} | {kind:'table';title:string;headers:string[];rows:string[][]} | {kind:'image';cid:string;caption:string};
 export interface MailPresentation {version:1;configuration?:{project:string;role:string;sources:string[];services:string[];deployment?:string}[];blocks:MailBlock[];text:string;html:string;}
 export interface Outbound {
+  scopeChange?:ScopeChange;
   stageId?:string;
   id: string; sessionId: string; kind: string; text: string; attachments: Attachment[];
   status: 'pending' | 'sending' | 'sent' | 'uncertain' | 'failed'; gmailId?: string; threadId?: string;

@@ -53,6 +53,7 @@ export class MultiWork {
         if(s.workflow?.guide&&!s.workflow.confirmed&&(await readWorkflowGuide()).version!==s.workflow.guide.version)throw Error('工作流指南变化，需新方案和 START');
     }
     async run(s: Session, t: RepoExecution, phase: 'plan' | 'develop', feedback: string, signal: AbortSignal, onThread: (id: string) => void) { return this.adapters(s, t).runner.run(this.view(s, t), phase, feedback, signal, onThread); }
+    async resolveScope(s:Session,t:RepoExecution,result:RunResult,signal:AbortSignal){return this.adapters(s,t).runner.resolveScope(this.view(s,t),result,signal);}
     async validate(s:Session,t:RepoExecution,signal:AbortSignal){
         const reason=(text:string)=>new Error(`${text}（基线 ${t.baseSha||'未准备'}；配置来源 ${t.profileSource||'legacy'}）`);
         if(t.profile.kind==='taro'){

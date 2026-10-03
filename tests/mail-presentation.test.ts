@@ -18,6 +18,16 @@ import type {Session,RepoExecution,MailBlock} from '../src/types.js';
 const sha='f89ef729982b8b21c6ad723df97850ad194bd5dd';
 function target(projectId:string):RepoExecution{return {projectId,identity:projectId,path:'/synthetic/'+projectId,github:'example-org/'+projectId,displayName:projectId,baseBranch:'main',baseSha:sha,profileVersion:'a'.repeat(64),manualMerge:false,profile:ProfileSchema.parse({kind:projectId==='mini'?'taro':'generic',install:[{executable:'npm',args:['ci']}],build:[{executable:'npm',args:['run','build:h5']}],checks:[{executable:'npm',args:['test']}]}),pendingChecks:['iOS / Android 真机验收']};}
 function task():Session{return {id:'synthetic',title:'示例笔记：图片缓存',subject:'隔离任务',repo:'sampleapp',createdAt:'now',initialMessageId:'initial',initialRfcId:'<initial>',initialThreadId:'thread',state:'WAITING_START',revision:3,cancellationEpoch:0,summary:'数据库图片改为私有目录，鉴权后传输；仅已处理的图片迁移。',planManifest:'b'.repeat(64),documentVersion:'c'.repeat(64),targets:[target('sampleapp'),target('mini')],references:[target('docs')],mergeOrder:['sampleapp','mini'],workflow:{stageId:'s2',number:2,history:[],proposal:{decision:'propose_step',kind:'implementation',name:'图片交付',rationale:'文档已合并',deliverables:['示例应用私有文件存储、迁移、鉴权与网页重试','小程序私人缓存、重验证与分享临时文件清理'],acceptance:['鉴权在缓存重验证之前','分享不缓存；撤销后拒绝访问','文件与数据库联合备份恢复和回滚'] }},mailBrief:{goal:'本次建议：确认图片交付方案并开始阶段 2。',choices:[{category:'product',topic:'产品体验',choice:'私人缓存；分享 no-store',reason:'加快私人重复访问，分享重验权限',tradeoff:'分享重复访问仍需传输'},{category:'technical',topic:'图片交付',choice:'应用鉴权，再由 Nginx 内部传输',reason:'文件不能公开直访',tradeoff:'迁移与备份同时覆盖文件和数据库'}],changes:['补充网页失败重试']}};}
+test('Scope change facts survive plan summarization while old sent and pending snapshots stay immutable',()=>{
+ const store=new Store(':memory:');try{
+  const s=task(),pending=store.notify(s,'plan','old pending'),sent=store.notify(s,'plan','old sent');sent.status='sent';store.saveMail(sent);
+  const before=[structuredClone(pending),structuredClone(sent)],change={reason:'新增服务端接口需要扩大修改范围',changes:['参考服务：reference → modify；实现新接口']};
+  const current=store.notify(s,'plan','summary can omit details',[],{preserveBinding:true,scopeChange:change});
+  assert.match(current.text,/reference → modify/);assert.match(current.text,/新增服务端接口/);assert.ok(current.presentation!.html.includes('范围变化'));change.changes[0]='mutated caller data';assert.ok(!current.text.includes('mutated'));
+  for(const previous of before){assert.deepEqual(store.mail(previous.id),previous);verifyPresentation(previous.presentation!,previous.summary,previous.attachments);}
+  assert.equal(current.approvalBinding!.version,approvalVersion(s,'START'));
+ }finally{store.close();}
+});
 test('Codex analysis and development outputs require a bounded readable mail brief; legacy mocks remain compatible',()=>{
  for(const schema of [ANALYSIS_OUTPUT_SCHEMA,OUTPUT_SCHEMA]){assert.ok(schema.required.includes('mailBrief'));assert.equal(schema.properties.mailBrief.additionalProperties,false);}
  assert.equal(MailBriefSchema.safeParse(task().mailBrief).success,true);assert.equal(MailBriefSchema.safeParse({...task().mailBrief,goal:'x'.repeat(1201)}).success,false);
