@@ -183,6 +183,16 @@ with meaningful options, a recommendation and its costs. Missing facts are reque
 without invented answers. Execution confirmation is separate; choosing a recommendation
 does not authorize development, merge or deployment.
 
+Cross-repository execution uses the confirmed inventory of project IDs, Git identities
+and roles. Codex returns a structured scope decision; remaining work in an already
+approved repository continues under the same START. A single writable worktree does
+not mean the other targets need re-approval. New repositories or wider roles require
+a revised plan that explains the actual changes, followed by a fresh START. Legacy
+description-based repository requests receive one read-only semantic interpretation;
+invalid output is recorded internally without turning it into a confirmation request.
+See [scope continuation validation](docs/validation-scope.md) for the contract and
+synthetic acceptance.
+
 `STATUS`, `CANCEL` and `RETRY` are available in the task thread. All commands, including exact English commands and short acknowledgements, use the same Codex entry. `RUN` cannot bypass a concrete plan and fresh `START`. Email cancellation waits for interpretation; an operator can stop the service directly when Codex is unavailable. Uncertain sends, merges or deployments require reconciliation; they are not automatically retried. Old or quoted approvals cannot authorize a new version.
 
 See [configuration](docs/configuration.md), [operations and migration](docs/operations.md), and [validation](docs/validation.md).

@@ -1,0 +1,179 @@
+{
+  "cases": [
+    {
+      "name": "legacy approved handoffs",
+      "ok": true,
+      "decision": {
+        "decision": "within_approved_scope",
+        "reason": "旧 requestedProjects 对应已批准的 mini 修改和 records 产品证据回填，属于 stage-1、doc-v1 的后续工作；没有新增仓库、角色扩大或执行条件变化，无需再次 START。此判断不改变当前仓库的完成事实。",
+        "requests": [
+          {
+            "projectId": "mini",
+            "identity": "identity-mini",
+            "path": null,
+            "role": "modify",
+            "reason": "完成小程序标签交互、列表分页及验证，属于已批准的修改范围。"
+          },
+          {
+            "projectId": "records",
+            "identity": "identity-records",
+            "path": null,
+            "role": "product_record",
+            "reason": "在各端工作完成并取得 PR 和界面证据后回填产品记录，属于已批准的证据回填范围。"
+          }
+        ],
+        "questions": []
+      }
+    },
+    {
+      "name": "invalid identity repaired",
+      "ok": true,
+      "decision": {
+        "decision": "within_approved_scope",
+        "reason": "手机端后续实施属于 stage-1、doc-v1 已批准范围；原请求的 identity 引用错误已按清单纠正，无需重新授权。",
+        "requests": [
+          {
+            "projectId": "mini",
+            "identity": "identity-mini",
+            "path": null,
+            "role": "modify",
+            "reason": "继续已批准的手机小程序实施，角色和阶段均未扩大。"
+          }
+        ],
+        "questions": []
+      }
+    },
+    {
+      "name": "genuine new repository",
+      "ok": true,
+      "decision": {
+        "decision": "propose_scope_change",
+        "reason": "旧 requestedProjects 明确要求修改此前未批准的 backend 仓库，属于真实新增范围；已批准仓库的后续实施和产品证据回填仍在原范围内。此判断不改变当前 Web 的执行结果，也不授予新权限。",
+        "requests": [
+          {
+            "projectId": null,
+            "identity": null,
+            "path": "backend",
+            "role": "modify",
+            "reason": "需要在新增 backend 仓库修改接口，扩大了本阶段的修改仓库范围；控制器须先只读规划，再取得该具体范围的 START 批准。"
+          }
+        ],
+        "questions": []
+      }
+    },
+    {
+      "name": "reference becomes writable",
+      "ok": true,
+      "decision": {
+        "decision": "propose_scope_change",
+        "reason": "执行结果要求修改参考服务的接口实现；该仓库当前仅批准只读参考，因此属于角色权限扩大。其他已批准仓库的后续实施和产品证据回填仍在原范围内。",
+        "requests": [
+          {
+            "projectId": "reference",
+            "identity": "identity-reference",
+            "path": null,
+            "role": "modify",
+            "reason": "需要将参考服务从只读参考扩大为可修改，以调整接口实现。此请求不授予写入权限，新增修改范围需由控制器另行取得具体 START 授权。"
+          }
+        ],
+        "questions": []
+      }
+    },
+    {
+      "name": "mixed approved and new repositories",
+      "ok": true,
+      "decision": {
+        "decision": "propose_scope_change",
+        "reason": "手机小程序的后续实施属于 stage-1、doc-v1 已批准范围；backend 未在批准清单中，修改其接口实现属于新增仓库范围，需控制器另行取得具体 START 授权。",
+        "requests": [
+          {
+            "projectId": "mini",
+            "identity": "identity-mini",
+            "path": null,
+            "role": "modify",
+            "reason": "继续已批准的示例手机小程序实施，属于原阶段后续工作，无需重复授权。"
+          },
+          {
+            "projectId": null,
+            "identity": null,
+            "path": "backend",
+            "role": "modify",
+            "reason": "新增 backend 仓库并修改接口实现，扩大当前批准范围；本次仅提出范围变更，不授予写入权限。"
+          }
+        ],
+        "questions": []
+      }
+    },
+    {
+      "name": "missing human-only fact",
+      "ok": true,
+      "decision": {
+        "decision": "need_context",
+        "reason": "旧 requestedProjects 描述的是清单之外的新增系统，不属于已批准仓库的后续工作；其源码位置未提供，无法识别或形成具体范围请求。",
+        "requests": [],
+        "questions": [
+          {
+            "text": "请提供该新增系统的实际目录或可读源码位置；若位于项目根目录内，请提供相对路径。",
+            "kind": "open",
+            "dependsOn": [],
+            "humanReason": "该系统仅位于负责人尚未提供的私人电脑目录中，现有上下文无法查明。需要负责人提供位置，才能识别仓库并形成只读范围方案；提供位置本身不授予修改权限。",
+            "options": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "fresh executor contract and confirmed document",
+      "ok": true,
+      "decision": {
+        "decision": "within_approved_scope",
+        "reason": "手机端修改和产品记录回填均属于已批准范围，不新增仓库或扩大角色权限，无需再次 START。",
+        "requests": [
+          {
+            "projectId": "mini",
+            "identity": "identity-mini",
+            "path": null,
+            "role": "modify",
+            "reason": "继续完成已批准的手机端实施，与已完成的 Web 修改衔接。"
+          },
+          {
+            "projectId": "records",
+            "identity": "identity-records",
+            "path": null,
+            "role": "product_record",
+            "reason": "在修改仓库执行完成后，最后回填产品证据与完成记录。"
+          }
+        ],
+        "questions": []
+      }
+    },
+    {
+      "name": "short reply binds one START without merge/deploy authority",
+      "ok": true
+    },
+    {
+      "name": "actual controller continues three approved repositories",
+      "ok": true,
+      "called": [
+        "web",
+        "mini"
+      ],
+      "evidence": [
+        "records"
+      ],
+      "planNotices": 1
+    }
+  ],
+  "sent": 0,
+  "businessExecuted": 0,
+  "verification": {
+    "node": "22.23.0",
+    "codexCli": "0.159.0",
+    "fullSuite": {
+      "passed": 188,
+      "failed": 0
+    },
+    "scopeCases": 9,
+    "syntheticOnly": true
+  }
+}

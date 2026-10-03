@@ -78,6 +78,10 @@ export function createPresentation(session:Session,m:Outbound,source:string,prev
   const briefs=m.kind==='review'?(s.targets||[]).flatMap(t=>t.mailBrief?[t.mailBrief]:[]):brief?[brief]:[];
   for(const category of ['product','technical'] as const){const choices=briefs.flatMap(b=>b.choices).filter(c=>c.category===category);table(blocks,category==='product'?'方案要点：产品':'方案要点：技术',['事项','方案与理由','主要代价或限制'],choices.map(c=>[c.topic,`${c.choice}\n理由：${c.reason}`,c.tradeoff]));}
   paragraph(blocks,'相比上一轮的变化',unique(briefs.flatMap(b=>b.changes)).join('\n'));
+  if(m.kind==='plan'&&m.scopeChange){
+   paragraph(blocks,'范围变化',m.scopeChange.changes.join('\n'));
+   paragraph(blocks,'变化原因与影响',m.scopeChange.reason+'\n已有成果保留；新增范围在本版本 START 后才可执行。');
+  }
   table(blocks,'本次范围',['项目','权限与结果'],[...(s.targets||[]).map(t=>[project(t),`${t.mergeSha?'已合并，只读':t.recordEvidence||t.auxiliary?'回填产品证据':'修改'}${m.kind==='review'?`：${t.mailBrief?.goal||t.resultSummary||t.diffSummary||'见交付物'}`:''}`]),...(s.references||[]).map(t=>[project(t),'只读参考，不纳入修改清单'])]);
   if(s.workflow?.proposal){paragraph(blocks,'本阶段交付',unique(s.workflow.proposal.deliverables).join('\n'));paragraph(blocks,'验收重点',unique(s.workflow.proposal.acceptance).join('\n'));}
   table(blocks,'验证情况',['项目','检查内容','结果'],checkRows(s,m.kind));
