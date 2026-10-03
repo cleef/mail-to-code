@@ -2,7 +2,7 @@ import { readFile, mkdir, writeFile, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { configDir } from './config.js';
-const template = fileURLToPath(new URL('../../config/AGENTS.md', import.meta.url));
+const template = fileURLToPath(new URL('../../config-templates/AGENTS.md', import.meta.url));
 export const agentGuidePath = (directory = configDir()) => join(directory, 'AGENTS.md');
 export async function readAgentGuide(directory = configDir()): Promise<string> {
     const path = agentGuidePath(directory);

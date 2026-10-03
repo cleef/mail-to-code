@@ -4,6 +4,10 @@ Edit this private guide to describe your projects and conventions. Project paths
 Git identities, execution profiles and approvals are independently checked by the
 controller. These notes do not grant write, merge or deployment permission.
 
+Reply in the same language as the operator's email. Preserve that language when
+a reply contains only a control command such as START or APPROVE; keep commands,
+code, paths and identifiers unchanged.
+
 Read relevant repository instructions before planning. Resolve ambiguous project
 names instead of guessing. Preserve existing worktrees and development contexts.
 Root analysis is read-only; development edits only the confirmed worktree.

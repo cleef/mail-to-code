@@ -9,7 +9,7 @@ export const WorkflowProposalSchema=z.object({decision:z.enum(['clarify','propos
 export type WorkflowProposal=z.infer<typeof WorkflowProposalSchema>;
 export const WORKFLOW_OUTPUT={type:'object',additionalProperties:false,required:['decision','kind','name','rationale','deliverables','acceptance'],properties:{decision:{type:'string',enum:['clarify','propose_step','complete']},kind:{type:'string',enum:['documentation','implementation','maintenance'],description:'documentation is exclusively product planning in the configured product-record repository. Ordinary repository README/docs/acceptance-file changes use maintenance.'},name:{type:'string'},rationale:{type:'string'},deliverables:{type:'array',items:{type:'string'}},acceptance:{type:'array',items:{type:'string'}}}};
 export interface WorkflowGuide {text:string;version:string;}
-const template=fileURLToPath(new URL('../../config/WORKFLOW.md',import.meta.url));
+const template=fileURLToPath(new URL('../../config-templates/WORKFLOW.md',import.meta.url));
 export const workflowGuidePath=(directory=configDir())=>join(directory,'WORKFLOW.md');
 export async function readWorkflowGuide(directory=configDir()):Promise<WorkflowGuide>{
  let text:string;
