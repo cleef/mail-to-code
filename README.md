@@ -130,7 +130,9 @@ If authorization is revoked or expires, run `auth` again.
 
 ### Verify and start
 
-Configure GitHub credentials and your projects before the readiness check. If
+Configure GitHub credentials and your projects before the readiness check. The
+service setup below uses Linux and systemd; have an administrator enable user
+lingering before `doctor`. If
 those projects require preview screenshots, build the preview image with
 `./scripts/build-preview.sh` before running `doctor`.
 For a new installation, prepare the current SQLite schema while the service is
@@ -150,8 +152,7 @@ the user service:
 systemctl --user start mail-to-code.service
 ```
 
-An administrator must enable user lingering for the service to survive logout.
-Podman and `./scripts/build-preview.sh` are needed when your configured projects
+User lingering keeps the service running after logout. Podman and `./scripts/build-preview.sh` are needed when your configured projects
 require screenshots or isolated test services. See [operations](docs/operations.md)
 for upgrades, backups and recovery.
 
