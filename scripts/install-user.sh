@@ -9,7 +9,7 @@ chmod 700 "$task_config" "$HOME/.local/share/mail-to-code"
 [[ "$task_root$task_node$task_config" != *[[:space:]]* ]] || { echo "Installation paths must not contain whitespace"; exit 1; }
 # Keep the operator's edited standalone guide across installations/upgrades.
 if [[ ! -e "$task_config/AGENTS.md" ]]; then
-  (umask 077; set -o noclobber; cat "$task_root/config/AGENTS.md" > "$task_config/AGENTS.md")
+  (umask 077; set -o noclobber; cat "$task_root/config-templates/AGENTS.md" > "$task_config/AGENTS.md")
 fi
 "$task_node" "$task_root/dist/src/cli.js" workflow-guide init
 cat > "$HOME/.config/systemd/user/mail-to-code.service" <<UNIT

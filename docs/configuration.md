@@ -1,6 +1,13 @@
 # Configuration
 
-`config/example.json` is a minimal template, without predefined repositories or deployment permissions. All paths, aliases and commands below are illustrative.
+`config-templates/example.json` is a minimal template, without predefined repositories or deployment permissions. All paths, aliases and commands below are illustrative.
+
+Templates are kept separate from active configuration in `~/.config/mail-to-code/`.
+`init` creates `config.json` and initializes the private `AGENTS.md` and `WORKFLOW.md`
+without overwriting edited guides. Gmail OAuth credentials are downloaded as
+`oauth-client.json`; `auth` generates and refreshes `token.json`. Keep all credentials
+outside the checkout. See the [README setup guide](../README.md#setup) for the file
+roles, permissions, Gmail console steps and remote authorization.
 
 ```json
 {
