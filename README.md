@@ -29,11 +29,3 @@ This repository currently contains the project overview only. The existing `mail
 - Separate merge and deployment decisions.
 
 MailToCode focuses on human-to-agent development workflows. Agent-to-agent coordination may be added through optional integrations as the project evolves.
-
-## 中文介绍
-
-**通过邮件驱动开发、审阅与交付。**
-
-MailToCode 是一个自托管的邮件开发工作流：通过邮件提出需求、讨论方案，由 Codex 在独立工作目录中完成开发，再通过测试结果、PR 和预览证据进行审阅。合并与部署分别需要人工批准。
-
-当前仓库仅包含项目介绍，现有 `mail-agent` 代码将在后续迁移；迁移完成后补充安装和使用文档。
