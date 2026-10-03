@@ -32,3 +32,12 @@ The plan test uses the real controller and in-memory state with synthetic work
 and mail adapters. Its two analysis calls are the initial and pinned-baseline
 passes of one planning job. No actual mailbox, project or production effects are
 performed by these tests.
+
+## Recorded results
+
+- Node 22.23.2 full suite: 145 tests passed, zero failures.
+- `node scripts/verify-feedback-batching.mjs`: actual Codex parsed four feedback
+  items; they shared one plan job, generated no extra receipt, and did not replay
+  duplicate intake. All four items completed with that shared job.
+- The actual-Codex acceptance used a separate synthetic database: zero real
+  emails sent and zero business adapters executed.
