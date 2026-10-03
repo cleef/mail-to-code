@@ -176,6 +176,13 @@ private SQLite event log instead. A feedback reply produces one revised proposal
 or Review, without a separate success receipt. An explicit `STATUS` request gets
 one status response. Each new stage still needs a fresh `START`. Codex explicitly chooses whether a round needs human input or only an internal record; guard refusals never become questions automatically.
 
+Codex chooses technical details and reversible experience defaults from the code,
+existing conventions and confirmed preferences. Plan points explain those decisions.
+Real business, privacy, cost or irreversible tradeoffs arrive as human questions,
+with meaningful options, a recommendation and its costs. Missing facts are requested
+without invented answers. Execution confirmation is separate; choosing a recommendation
+does not authorize development, merge or deployment.
+
 `STATUS`, `CANCEL` and `RETRY` are available in the task thread. All commands, including exact English commands and short acknowledgements, use the same Codex entry. `RUN` cannot bypass a concrete plan and fresh `START`. Email cancellation waits for interpretation; an operator can stop the service directly when Codex is unavailable. Uncertain sends, merges or deployments require reconciliation; they are not automatically retried. Old or quoted approvals cannot authorize a new version.
 
 See [configuration](docs/configuration.md), [operations and migration](docs/operations.md), and [validation](docs/validation.md).

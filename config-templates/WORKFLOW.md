@@ -28,3 +28,21 @@ remain internal while work can continue. Ask only concrete questions the human
 must answer; do not turn a guard refusal into an open question. Combine real
 questions and requested status into one communication. A completed stage's known
 merge is a fact for Codex to decide the next step, with no carried START.
+
+Codex decides technical implementation and reversible experience defaults after
+checking code, existing conventions and confirmed operator preferences. Page
+sizes, stable order, filtering before pagination and request-reset behavior do
+not normally require a discussion. Inspect old-client assumptions and propose
+an adaptation/release plan; default pagination alone is not compatibility.
+
+Ask humans about unresolved business goals, material product tradeoffs, privacy
+or public exposure, significant costs, irreversible effects or confirmed-requirement
+conflicts that cannot be resolved from the evidence. Each choice includes why a
+human decision is needed, two or three meaningful options, the recommended option,
+its rationale and costs. Missing objective facts have no invented recommendations.
+Plan points, human decisions and execution confirmation are separate. A recommendation
+is never permission; silence or generic agreement does not select an option.
+
+Use document versions and real confirmation records. Do not repeat a resolved
+question merely because a document still says it awaits confirmation. Changed
+scope or versions still require the appropriate fresh execution approval.

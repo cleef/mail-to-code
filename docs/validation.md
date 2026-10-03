@@ -7,3 +7,12 @@ Run `npm test` on Node 22. The suite uses synthetic repositories and mail transp
 Before deployment, rehearse migration on a WAL-consistent private database copy. Compare historical outbox/inbox, Gmail cursor, PRs, commits, worktrees and Codex contexts. Confirm that adoption queues planning only and that stale confirmations cannot execute. Test both pre-start restoration and database-compatible recovery. Keep live task content and acceptance reports private.
 
 A real mailbox acceptance requires an authenticated request from the configured owner. Confirm intake, proposal, START, implementation, independent checks and Review. It does not authorize merge or deployment.
+
+`node scripts/verify-discussions.mjs` checks autonomous pagination defaults, real
+privacy choices with recommendations, missing facts, confirmed document versions
+and explicit recommendation replies through the real Codex CLI. All inputs are
+synthetic; mail sending and business execution are forbidden. The unit suite
+checks shared prompts, option/reference validation, metadata propagation,
+separate discussion/authorization rendering and untouched historical snapshots.
+
+For pagination compatibility decisions, [AIP-158](https://google.aip.dev/158#backwards-compatibility) explains why changing an existing full-list response to a finite default changes old-client behavior. Inspect those assumptions before proposing adaptation and rollout.

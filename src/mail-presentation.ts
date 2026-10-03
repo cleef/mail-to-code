@@ -1,5 +1,5 @@
 import {escapeHtml,summaryHtml,summaryText} from './mail-summary.js';
-import type {Attachment,MailBlock,MailPresentation,MailSummary,Outbound,RepoExecution,Session} from './types.js';
+import type {Attachment,MailBlock,MailPresentation,MailSummary,Outbound,RepoExecution,Session,MailQuestion} from './types.js';
 
 // Display-only. Authorization always uses the untouched full version/baseline.
 export function readable(value:string):string {
@@ -58,6 +58,14 @@ function configRows(s:Session,previous?:MailPresentation){
  }
  return {facts,rows};
 }
+function renderDiscussion(blocks:MailBlock[],q:MailQuestion){
+ paragraph(blocks,'需要你判断的原因',q.humanReason);
+ const options=[...(q.options||[])];
+ const recommended=options.find(o=>o.id===q.recommendedOptionId);
+ if(recommended)options.splice(0,options.length,recommended,...options.filter(o=>o!==recommended));
+ table(blocks,'可选方案',['选项','方案','影响'],options.map(o=>[o.id,o.label+(o===recommended?'（推荐）':''),o.impact]));
+ paragraph(blocks,'推荐理由',q.recommendationReason);
+}
 export function createPresentation(session:Session,m:Outbound,source:string,previous?:MailPresentation):MailPresentation {
  const s=session.targets?.length?session:{...session,targets:session.repo?[{projectId:session.repo,baseSha:session.baseSha,reviewSha:session.reviewSha,mergeSha:session.mergeSha,checks:session.checks,mailBrief:session.mailBrief,resultSummary:session.summary} as RepoExecution]:[]};
  const blocks:MailBlock[]=[];
@@ -68,7 +76,7 @@ export function createPresentation(session:Session,m:Outbound,source:string,prev
   paragraph(blocks,'本邮件结论',m.kind==='plan'?(brief?.goal||s.summary||s.workflow?.proposal?.rationale):((s.targets||[]).length?`本次 Review 包含 ${s.targets!.length} 个项目，等待审阅完整交付物。`:'当前 Review 等待审阅交付物。'));
   paragraph(blocks,'当前进度',m.kind==='plan'?(s.targets?.some(t=>t.worktree)?'已有阶段工作保留；本邮件提出调整后的方案。下表为计划验证，不代表新方案测试已通过。':'本阶段尚未开始实施；下表为计划验证，不代表测试已通过。'):`Review #${s.revision}；批准范围为下列完整仓库清单。${s.workflow?.proposal?.kind==='documentation'?'文档合并后仅规划下一阶段，实施需新的 START。':'代码合并后，生产部署仍需单独确认。'}`);
   const briefs=m.kind==='review'?(s.targets||[]).flatMap(t=>t.mailBrief?[t.mailBrief]:[]):brief?[brief]:[];
-  for(const category of ['product','technical'] as const){const choices=briefs.flatMap(b=>b.choices).filter(c=>c.category===category);table(blocks,category==='product'?'产品选择':'技术选择',['事项','方案与理由','主要代价或限制'],choices.map(c=>[c.topic,`${c.choice}\n理由：${c.reason}`,c.tradeoff]));}
+  for(const category of ['product','technical'] as const){const choices=briefs.flatMap(b=>b.choices).filter(c=>c.category===category);table(blocks,category==='product'?'方案要点：产品':'方案要点：技术',['事项','方案与理由','主要代价或限制'],choices.map(c=>[c.topic,`${c.choice}\n理由：${c.reason}`,c.tradeoff]));}
   paragraph(blocks,'相比上一轮的变化',unique(briefs.flatMap(b=>b.changes)).join('\n'));
   table(blocks,'本次范围',['项目','权限与结果'],[...(s.targets||[]).map(t=>[project(t),`${t.mergeSha?'已合并，只读':t.recordEvidence||t.auxiliary?'回填产品证据':'修改'}${m.kind==='review'?`：${t.mailBrief?.goal||t.resultSummary||t.diffSummary||'见交付物'}`:''}`]),...(s.references||[]).map(t=>[project(t),'只读参考，不纳入修改清单'])]);
   if(s.workflow?.proposal){paragraph(blocks,'本阶段交付',unique(s.workflow.proposal.deliverables).join('\n'));paragraph(blocks,'验收重点',unique(s.workflow.proposal.acceptance).join('\n'));}
@@ -80,7 +88,7 @@ export function createPresentation(session:Session,m:Outbound,source:string,prev
  }else{
   // Updates/clarifications carry only new information, never paste a full Review again.
   paragraph(blocks,'本邮件结论',m.kind==='input'&&source===s.summary?brief?.goal||source:source);
-  if(m.kind==='input'&&source===s.summary&&brief)table(blocks,'待讨论的选择',['事项','方案与理由','代价或限制'],brief.choices.map(c=>[c.topic,`${c.choice}\n理由：${c.reason}`,c.tradeoff]));
+  if(m.kind==='input'&&brief)table(blocks,'方案要点',['事项','方案与理由','代价或限制'],brief.choices.map(c=>[c.topic,`${c.choice}\n理由：${c.reason}`,c.tradeoff]));
   if(m.kind==='status')paragraph(blocks,'最近变化',s.mailBrief?.changes.join('\n'));
   if(m.kind==='failure')table(blocks,'执行结果',['项目','检查内容','结果'],checkRows(s,m.kind));
   if(m.kind==='merge'||m.kind==='deployed'){
@@ -88,8 +96,16 @@ export function createPresentation(session:Session,m:Outbound,source:string,prev
    if(/配置已变化/.test(source))table(blocks,'新的执行条件',['项目','变化','具体影响'],configRows(s,previous).rows);
   }
  }
- table(blocks,'需要回复的事项',['编号','类型','事项'],(m.questions||[]).map((q,n)=>[String(n+1),q.kind==='confirm'?'确定确认项':q.kind==='choice'?'选择题':'开放问题',q.text]));
- if(m.questions?.length)paragraph(blocks,'回复方式',m.questions.some(q=>q.kind==='confirm')?'可回复“确认／同意”确认本邮件中全部确定事项；选择题与开放问题请具体回答。调整意见可一次提出多项。'+(m.approvalBinding?.action==='START'?' START 同样确认本次方案、范围和执行条件；本次确认不包含生产部署。':m.approvalBinding?.action==='APPROVE'?' APPROVE 批准完整 Review；本次确认不包含生产部署。':''):'请一次回答上述问题，可直接用中文提出多项意见。');
+ const numbered=(m.questions||[]).map((q,n)=>({q,number:n+1}));
+ const authorization=numbered.filter(({q})=>q.kind==='confirm'||q.action&&q.action!=='future');
+ const discussion=numbered.filter(v=>!authorization.includes(v));
+ for(const {q,number} of discussion){
+  paragraph(blocks,discussion[0].number===number?'需要你决定':'',`${number}. ${q.text}`);
+  renderDiscussion(blocks,q);
+ }
+ table(blocks,'执行确认',['编号','事项'],authorization.map(({q,number})=>[String(number),q.text]));
+ for(const {q,number} of authorization)if(q.options?.length){paragraph(blocks,`第 ${number} 项的选择`,q.text);renderDiscussion(blocks,q);}
+ if(numbered.length)paragraph(blocks,'回复方式',authorization.length?'可回复“确认／同意”确认本邮件中明确的执行事项；选择题和开放问题请按编号具体回答。调整意见可一次提出多项。'+(m.approvalBinding?.action==='START'?' START 确认本次方案、范围和执行条件；生产部署另行确认。':m.approvalBinding?.action==='APPROVE'?' APPROVE 批准完整 Review；生产部署另行确认。':''):'可按编号回复选项或具体答案，也可明确说明采用哪一项推荐方案。');
  if(m.kind==='review'&&(s.targets||[]).some(t=>t.manualMerge))paragraph(blocks,'合并方式','包含控制器自身，整批需要用户手动合并。');
  for(const a of m.attachments.filter(a=>a.cid))blocks.push({kind:'image',cid:a.cid!,caption:readable(`真实交付截图：${a.filename}。图片仅作视觉证据，审批范围和验证结果以上述文字为准。`)});
  const rendered=renderPresentation(m.summary,blocks,m.attachments);
