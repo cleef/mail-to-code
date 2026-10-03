@@ -541,3 +541,13 @@ test('A real reference-to-write change preserves worktrees and explains the new 
   x.controller.handle(x.message('START',oldPlan));await x.controller.startNext();assert.equal(x.s().targets![1].worktree,undefined);
  }finally{await x.cleanup();}
 });
+
+
+test('Real blockers accompany scope-change planning instead of being discarded',async()=>{
+ const x=await fixture();try{
+  await x.review('PROJECTS: one');await x.flush();
+  x.work.run=async()=>({outcome:'needs_input',summary:'缺少业务事实，当前实现未完成',questions:['需要负责人提供样例格式'],requiresBackend:true,screenshotTargets:[],scopeDecision:{decision:'propose_scope_change',reason:'还需要新接口仓库',requests:[{projectId:null,identity:null,path:'two',role:'modify',reason:'接口实现'}],questions:[]}}) as any;
+  x.controller.handle(x.message('修改接口',x.s().reviewNotice));await x.controller.startNext();
+  const job=x.store.jobs().find(j=>j.kind==='plan'&&j.status==='queued')!;assert.ok(job);assert.match(job.feedback,/needs_input/);assert.match(job.feedback,/需要负责人提供样例格式/);assert.match(job.feedback,/当前实现未完成/);assert.equal(x.s().state,'WAITING_INPUT');
+ }finally{await x.cleanup();}
+});

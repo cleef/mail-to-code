@@ -26,7 +26,7 @@ omits them. Existing pending/sent presentation snapshots remain immutable.
 ## Verification
 
 Verified locally with Node 22.23.0 and Codex CLI 0.159.0: the complete suite
-passed 187/187, and real Codex synthetic acceptance passed 9/9. See the
+passed 188/188, and real Codex synthetic acceptance passed 9/9. See the
 [synthetic acceptance report](acceptance-scope.json). Actual mail sends and
 business operations were both zero.
 
@@ -48,6 +48,7 @@ Coverage includes:
 - Valid new scope output, identity repair, a new repository, read-to-write expansion,
   mixed existing/new requests and missing human-only facts.
 - Real `needs_input` remains blocked; scope interpretation cannot mark it complete.
+  When scope also changes, its unfinished facts and questions accompany read-only planning.
 - A same-version confirmed design stays confirmed despite an old document label.
 - A concrete short START reply binds only its current version; duplicate receipt
   does not replay it or grant merge/deployment authority.

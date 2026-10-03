@@ -601,7 +601,7 @@ export class MultiController extends Controller {
                         this.store.event(s.id,'scope_decision',{projectId:t.projectId,decision:scope.decision,reason:scope.reason,changes});
                         if(scope.decision==='propose_scope_change'){
                             s.summary=summaries.join('\n\n');s.state='WAITING_INPUT';s.blockedPhase='plan';save();
-                            const next=this.store.enqueue(s,'plan',job.feedback+'\nCodex 提出的真实范围变化：'+JSON.stringify(scope));
+                            const next=this.store.enqueue(s,'plan',job.feedback+'\nCodex 提出的真实范围变化：'+JSON.stringify(scope)+'\n当前仓库执行事实（只读规划必须保留真实阻塞，不能当作完成）：'+JSON.stringify({outcome:result.outcome,summary:result.summary,questions:result.questions,pendingChecks:result.pendingChecks||[]}));
                             next.scopeChange={reason:scope.reason,changes};this.store.saveJob(next);
                             this.store.recordProgress(s,'scope','真实范围变化，正在只读规划；已有成果保留，新范围需新的 START。\n'+changes.join('\n'));break;
                         }
