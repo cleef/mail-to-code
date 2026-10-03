@@ -114,12 +114,12 @@ export class MultiController extends Controller {
         const configurationChanged = (s.targets||[]).some(t => this.registry.entries.has(t.projectId)&&this.registry.changed(t));
         const phase = configurationChanged || s.blockedPhase === 'plan' || ['PLANNING', 'WAITING_START'].includes(s.state) ? 'plan' : 'develop';
         // Additional repository declarations always return to planning; never silently widen write access.
-        const declared = /^PROJECTS:\s*(.+)$/mi.exec(text)?.[1]?.split(/[,，\s]+/).filter(Boolean).map(v => v.toLowerCase());
-        if(declared)s.projectHints=[...new Set([...(s.projectHints||[]),...declared])];
+        const declared = [...text.matchAll(/^PROJECTS:\s*(.+)$/gmi)].flatMap(m=>m[1].split(/[,，\s]+/).filter(Boolean).map(v=>v.toLowerCase()));
+        if(declared.length)s.projectHints=[...new Set([...(s.projectHints||[]),...declared])];
         s.reviewNotice = undefined;
         s.planNotice = undefined;
         s.lastError = undefined;
-        s.blockedPhase = declared ? 'plan' : phase;
+        s.blockedPhase = declared.length ? 'plan' : phase;
         this.store.save(s);
         this.store.enqueue(s, s.blockedPhase, text);
     }
@@ -289,7 +289,10 @@ export class MultiController extends Controller {
             const records=fresh.conversation!.records.filter(r=>r.source===context.incoming.id);
             for(const r of records.filter(r=>r.status==='blocked'))if(!questions.length){const b=currentBinding(fresh);const action=r.item.action.toUpperCase();questions.push(b&&b.action===action?{text:action==='START'?'确认按更新后的当前方案实施':action==='APPROVE'?'确认合并当前有效 Review 的完整清单':'请指定要发布的已合并项目',kind:action==='DEPLOY'?'choice':'confirm',action:b.action,dependsOn:[]}:{text:r.reason||'请补充该事项的处理要求',kind:'open',dependsOn:[]});}
             const lines=records.map((r,n)=>`${n+1}. ${r.item.text||r.item.evidence}：${r.status==='queued'?'已批准并排队':r.status==='waiting'?'等待前置事项完成':r.status==='done'?'已处理':r.status==='blocked'?'待澄清':'已保留'}${r.reason?'（'+r.reason+'）':''}`);
-            this.help(fresh,[...lines,...notes.filter(n=>!lines.some(l=>l.includes(n)))].join('\n')||'本次回复尚有未决事项。',questions,context.incoming.id);
+            // Successful edits will return their revised plan/Review. Send an
+            // immediate reply only when there is a question or another action.
+            const feedbackOnly=records.length>0&&records.every(r=>r.item.action==='feedback'&&['queued','waiting'].includes(r.status))&&!questions.length&&!notes.length;
+            if(!feedbackOnly)this.help(fresh,[...lines,...notes.filter(n=>!lines.some(l=>l.includes(n)))].join('\n')||'本次回复尚有未决事项。',questions,context.incoming.id);
         }
     }
     private advanceReplies(s:Session){
@@ -301,6 +304,8 @@ export class MultiController extends Controller {
             else if(effects.length&&effects.every(j=>j!.status==='done'))r.status='done';
         }
         for(const r of c.records.filter(r=>['accepted','waiting'].includes(r.status))){
+            // A previous iteration may have queued this item in a feedback batch.
+            if(!['accepted','waiting'].includes(r.status))continue;
             if(s.state==='CANCELLED'&&r.item.action!=='status'){r.status='blocked';r.reason='任务已取消';continue;}
             const dependencies=[...r.item.dependsOn.map(id=>r.source+'/'+id),...(r.dependencies||[])].map(id=>c.records.find(d=>d.id===id));
             if(dependencies.some(d=>!d||d.status==='blocked')){r.status='blocked';r.reason='依赖事项未获批准或执行失败';continue;}
@@ -314,14 +319,24 @@ export class MultiController extends Controller {
             const sourceJob=this.store.jobs().find(j=>j.reply?.incoming.id===r.source);
             if(!immediate&&(this.pending(s)||sourceJob&&this.earlierReply(sourceJob))){r.status='waiting';continue;}
             const before=this.store.jobs().map(j=>({id:j.id,status:j.status}));
-            if(r.item.action==='feedback')this.multiFeedback(s,r.item.text||r.item.evidence);
+            // Independent changes from one reply describe one revised delivery.
+            // Retain each item, but bind them to the same job and completion.
+            // Unmet dependencies and control actions are never folded into it.
+            const batch=r.item.action==='feedback'?c.records.filter(q=>
+                q.source===r.source&&q.stageId===r.stageId&&q.item.action==='feedback'&&
+                ['accepted','waiting'].includes(q.status)&&
+                [...q.item.dependsOn.map(id=>q.source+'/'+id),...(q.dependencies||[])].every(id=>c.records.find(d=>d.id===id)?.status==='done')
+            ):[r];
+            if(r.item.action==='feedback')this.multiFeedback(s,batch.map(q=>q.item.text||q.item.evidence).join('\n\n'));
             else this.applyCommand(s,r.item.action.toUpperCase(),r.binding,r.binding?.noticeId||'',r.item.project);
             const added=this.store.jobs().filter(j=>j.sessionId===s.id&&(j.kind!=='interpret'||r.item.action==='retry')&&j.status==='queued'&&!before.some(b=>b.id===j.id&&b.status==='queued'));
-            r.jobIds=added.map(j=>j.id);
-            if(added.length)r.status='queued';
-            else if(r.item.action==='status'||r.item.action==='cancel'&&(s as Session).state==='CANCELLED')r.status='done';
-            else{r.status='blocked';r.reason='当前阶段、版本或权限不允许执行此事项';}
-            if(['queued','done'].includes(r.status))for(const q of r.item.questionRefs)if(!c.answered.includes(q))c.answered.push(q);
+            for(const record of batch){
+                record.jobIds=added.map(j=>j.id);
+                if(added.length)record.status='queued';
+                else if(record.item.action==='status'||record.item.action==='cancel'&&(s as Session).state==='CANCELLED')record.status='done';
+                else{record.status='blocked';record.reason='当前阶段、版本或权限不允许执行此事项';}
+                if(['queued','done'].includes(record.status))for(const q of record.item.questionRefs)if(!c.answered.includes(q))c.answered.push(q);
+            }
         }
         if(!this.pending(s)&&advanceRequestedStage(s)){this.store.enqueue(s,'plan','已合并当前完整阶段；根据保留的后续要求只读生成下一方案，等待新 START。');this.store.event(s.id,'requested_stage_completed',{next:s.workflow!.stageId});}
         this.store.save(s);

@@ -12,6 +12,7 @@ import {currentBinding} from '../src/approval.js';
 import {migrate} from '../src/migration.js';
 import {Runner} from '../src/runner.js';
 import {fakeMail} from './fake-mail.js';
+import {ProfileSchema} from '../src/profile.js';
 import type {Session,Incoming,ReplyDecision,ReplyItem,ReplyContext} from '../src/types.js';
 const item=(id:string,action:ReplyItem['action'],evidence:string,text=evidence,dependsOn:string[]=[]):ReplyItem=>({id,action,clear:true,evidence,text,questionRefs:[],dependsOn});
 async function fixture(){
@@ -55,6 +56,57 @@ test('Current changes block approval, whereas future changes can coexist with ap
  const x=await fixture();try{
   x.set({items:[item('merge','approve','同意合并'),item('edit','feedback','但先修改设计')],questions:[]});await x.run('同意合并，但先修改设计');
   assert.equal(x.pending()[0].kind,'develop');assert.ok(!x.pending().some(j=>j.kind==='merge'));assert.equal(x.task().conversation!.records[0].status,'blocked');
+ }finally{await x.cleanup();}
+});
+test('Four independent feedback items produce one ready plan and keep its approval valid',async()=>{
+ const x=await fixture();try{
+  const s=x.task();s.state='WAITING_INPUT';s.blockedPhase='plan';s.reviewNotice=undefined;x.store.save(s);
+  const texts=['采用交集筛选','只提供单篇标签增删','明确命名去重规则','提供两端编辑草图'];
+  x.set({items:texts.map((text,n)=>item(String(n), 'feedback',text)),questions:[]});
+  const input=x.incoming(texts.join('\n'));x.controller.handle(input);x.controller.handle(input);await x.controller.startNext();
+  assert.equal(x.pending().length,1);const job=x.pending()[0];assert.equal(job.kind,'plan');for(const text of texts)assert.ok(job.feedback.includes(text));
+  assert.equal(x.store.mails().filter(m=>m.kind==='help').length,0);
+  assert.ok(x.task().conversation!.records.every(r=>r.status==='queued'&&r.jobIds?.[0]===job.id));
+  let analyses=0;
+  const p={alias:'app',identity:'synthetic-app',path:join(x.root,'app'),relativePath:'app',github:'example-org/app',baseBranch:'main',profile:ProfileSchema.parse({}),profileSource:'proposal',version:'profile',baselineSha:'base',snapshotPath:join(x.root,'snapshot'),ready:true,manualMerge:false};
+  Object.assign(x.controller.multiWork,{
+   analyze:async(_s:Session,text:string)=>{analyses++;for(const expected of texts)assert.ok(text.includes(expected));return {outcome:'plan_ready',summary:'统一方案',questions:[],projects:[{path:'app',displayName:'App',role:'modify',pendingChecks:[]}],mergeOrder:['app'],workflow:{decision:'propose_step',kind:'maintenance',name:'修改',rationale:'反馈已合并',deliverables:['修改'],acceptance:['检查']}};},
+   prepareProject:async()=>p,validate:async()=>{},verifyPlan:async()=>{}
+  });
+  job.status='running';x.store.saveJob(job);await (x.controller as any).executeMulti(job,new AbortController().signal);
+  assert.equal(analyses,2); // Initial and pinned-baseline analysis within one job.
+  assert.equal(x.task().state,'WAITING_START');assert.equal(x.store.mails().filter(m=>m.kind==='plan').length,1);
+  const notice=x.task().planNotice;while(x.store.mails().some(m=>m.status==='pending'))await x.controller.flush();
+  for(let n=0;n<4;n++)x.store.transaction(()=>(x.controller as any).advanceReplies(x.task()));
+  assert.equal(x.store.jobs().filter(j=>j.kind==='plan').length,1);assert.ok(x.task().conversation!.records.every(r=>r.status==='done'));assert.equal(x.task().planNotice,notice);
+  await x.run('START',notice);assert.equal(x.pending().filter(j=>j.kind==='develop').length,1);
+ }finally{await x.cleanup();}
+});
+test('A shared feedback job survives restart and all its items fail together without replay',async()=>{
+ const x=await fixture();try{
+  x.set({items:[item('a','feedback','调整标题'),item('b','feedback','调整布局')],questions:[]});await x.run('调整标题，调整布局');
+  const job=x.pending()[0];job.status='running';x.store.saveJob(job);x.store.recover();
+  x.store.transaction(()=>(x.controller as any).advanceReplies(x.task()));
+  assert.equal(x.task().state,'FAILED');assert.ok(x.task().conversation!.records.every(r=>r.status==='blocked'));assert.equal(x.pending().length,0);assert.equal(x.store.jobs().filter(j=>j.kind==='develop').length,1);
+  await x.run('START');assert.equal(x.pending().length,0);
+ }finally{await x.cleanup();}
+});
+test('Feedback batching preserves unmet dependencies, blocked items and separate source emails',async()=>{
+ const x=await fixture();try{
+  x.set({items:[item('a','feedback','调整标题'),item('b','feedback','随后改布局','随后改布局',['a']),{...item('c','feedback','尚未明确'),clear:false}],questions:[]});await x.run('调整标题，随后改布局，尚未明确');
+  assert.equal(x.pending().length,1);assert.deepEqual(x.task().conversation!.records.map(r=>r.status),['queued','waiting','blocked']);
+  assert.equal(x.store.mails().filter(m=>m.kind==='help').length,1);
+  const first=x.pending()[0];first.status='done';x.store.saveJob(first);x.store.transaction(()=>(x.controller as any).advanceReplies(x.task()));
+  assert.equal(x.pending().length,1);assert.equal(x.pending()[0].feedback,'随后改布局');assert.equal(x.task().conversation!.records[2].status,'blocked');
+  x.set({items:[item('d','feedback','另一封邮件修改')],questions:[]});await x.run('另一封邮件修改');
+  assert.equal(x.task().conversation!.records[3].status,'waiting');const second=x.pending()[0];second.status='done';x.store.saveJob(second);x.store.transaction(()=>(x.controller as any).advanceReplies(x.task()));
+  assert.equal(x.pending().length,1);assert.equal(x.pending()[0].feedback,'另一封邮件修改');
+ }finally{await x.cleanup();}
+});
+test('Batched project declarations preserve every explicit repository hint',async()=>{
+ const x=await fixture();try{
+  x.set({items:[item('a','feedback','PROJECTS: one'),item('b','feedback','PROJECTS: two')],questions:[]});await x.run('PROJECTS: one\nPROJECTS: two');
+  assert.deepEqual(x.task().projectHints,['one','two']);assert.equal(x.pending().length,1);assert.equal(x.pending()[0].kind,'plan');
  }finally{await x.cleanup();}
 });
 test('Bare reply to legacy mail requests a fresh concrete confirmation; stale structured replies cannot approve',async()=>{
