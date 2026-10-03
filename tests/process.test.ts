@@ -12,7 +12,7 @@ test('timeout and cancellation terminate a running process',async()=>{
 test('SQLite history cursor and IDs survive reopening; newer schema cannot be silently downgraded',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'mail-to-code-db-'));try{
     const path=join(dir,'state.sqlite');let store=new Store(path);const id=store.newId(new Date('2026-09-30T00:00:00Z'));store.set('gmail_history','100');store.close();
-    store=new Store(path);assert.equal(store.get('gmail_history'),'100');assert.notEqual(store.newId(new Date('2026-09-30T00:00:00Z')),id);store.set('schema_version','3');store.migrate(s=>s);assert.equal(store.get('schema_version'),'3');store.set('schema_version','7');store.close();assert.throws(()=>new Store(path),/migration required/);
+    store=new Store(path);assert.equal(store.get('gmail_history'),'100');assert.notEqual(store.newId(new Date('2026-09-30T00:00:00Z')),id);store.set('schema_version','3');store.migrate(s=>s);assert.equal(store.get('schema_version'),'3');store.set('schema_version','8');store.close();assert.throws(()=>new Store(path),/migration required/);
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 

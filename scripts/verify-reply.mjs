@@ -9,7 +9,7 @@ import {MultiController} from '../dist/src/multi-controller.js';
 import {migrate} from '../dist/src/migration.js';
 import {Delivery} from '../dist/src/delivery.js';
 import {GmailClient} from '../dist/src/gmail.js';
-import {parseIncoming,directive} from '../dist/src/mail.js';
+import {parseIncoming} from '../dist/src/mail.js';
 import {ReplyInterpreter} from '../dist/src/reply-interpreter.js';
 import {replyPolicy,shellEnvironment} from '../dist/src/runner.js';
 import {execute} from '../dist/src/process.js';
@@ -33,14 +33,14 @@ try{
    const result=await new Delivery(c,store,readOnly).backfill();if(result.some(r=>r.result!=='verified'))throw Error('Legacy sent identity backfill incomplete');report.mail={verified:result.length};
    const s=store.sessions().find(s=>!s.system&&s.state==='WAITING_START'&&s.planNotice);if(!s)throw Error('No existing waiting plan for reply acceptance');const plan=store.mail(s.planNotice);if(plan.identityStatus!=='verified')throw Error('Waiting plan not verified');
    const inputs=store.db.prepare('SELECT id FROM inbox WHERE session_id=? ORDER BY rowid DESC LIMIT 8').all(s.id);let input;
-   for(const row of inputs){const raw=await readOnly.read(row.id),p=await parseIncoming(raw.id,raw.threadId,raw.raw,c.ownerAddress);const action=directive(p.subject,p.text,true);if(p.trusted&&action.type==='command'&&action.command==='START'&&p.inReplyTo===plan.rfcMessageId){input=p;break;}}
-   if(!input)throw Error('Original correctly addressed START not found');
-   const controller=new MultiController(c,store,readOnly,{},new ProjectRegistry(c,store),{});input.id='VERIFY-'+input.id;controller.handle(input);controller.handle(input);
-   if(store.session(s.id).state!=='QUEUED'||store.jobs().filter(j=>j.sessionId===s.id&&j.kind==='develop'&&j.status==='queued').length!==1)throw Error('Original START was not queued exactly once');report.mail.originalReplyRecovered=true;report.mail.sent=0;report.mail.businessExecuted=0;
+   for(const row of inputs){const raw=await readOnly.read(row.id),p=await parseIncoming(raw.id,raw.threadId,raw.raw,c.ownerAddress);if(p.trusted&&p.inReplyTo===plan.rfcMessageId){input=p;break;}}
+   if(!input)throw Error('Original correctly addressed owner reply not found');
+   const controller=new MultiController(c,store,readOnly,{},new ProjectRegistry(c,store),{interpretReply:(session,context,signal)=>new ReplyInterpreter(c).interpret(session,context,signal)});controller.startBusiness=()=>undefined;input.id='VERIFY-'+input.id;controller.handle(input);controller.handle(input);await controller.startNext();
+   const interpreted=store.jobs().filter(j=>j.kind==='interpret'&&j.reply?.incoming.id===input.id);if(interpreted.length!==1||interpreted[0].status!=='done')throw Error('Original owner reply was not interpreted exactly once');report.mail.originalReplyRecovered=true;report.mail.sent=0;report.mail.businessExecuted=0;
   }finally{store.close();}
-  console.log('isolated current-schema migration, real Gmail read-only identity backfill, original START routing passed');
+  console.log('isolated current-schema migration, real Gmail read-only identity backfill, original owner-reply semantic routing passed');
  }
- if(process.argv.includes('--codex')||process.argv.includes('--edges')){await import('./verify-conversations.mjs');report.semantic='v6 isolated multi-item acceptance';}
+ if(process.argv.includes('--codex')||process.argv.includes('--edges')){await import('./verify-conversations.mjs');report.semantic='v7 isolated semantic acceptance';}
 
  await writeFile(join(c.dataDir,'report.json'),JSON.stringify(report,null,2),{mode:0o600});console.log(JSON.stringify({directory:c.dataDir,permissions:!!report.permissions,mail:report.mail,semantic:report.semantic}));
 }catch(e){await writeFile(join(c.dataDir,'report.json'),JSON.stringify({...report,error:e.message},null,2),{mode:0o600});throw e;}

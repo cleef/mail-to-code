@@ -11,7 +11,7 @@ export async function migrate(config: Config, store: Store, registry: ProjectReg
     if (active)
         throw new Error('Stop mail-to-code.service before migration');
     const source=store.get('schema_version')||'1';
-    if(source==='6')return {version:6,alreadyMigrated:true};
+    if(source==='7')return {version:7,alreadyMigrated:true};
     if(['1','2'].includes(source))for(const s of store.sessions())if(!s.targets&&!s.system)await registry.resolve(s.repo);
     const directory = join(config.dataDir, 'backups');
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -22,7 +22,7 @@ export async function migrate(config: Config, store: Store, registry: ProjectReg
     store.transaction(() => {
         store.db.exec('CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,data TEXT NOT NULL)');
         for(const old of store.sessions()){
-            if(source==='5'){store.save(old);continue;}
+            if(['5','6'].includes(source))continue;
             if(source==='4'){ensureWorkflow(old,true);store.save(old);continue;}
             if(source==='3'){ensureWorkflow(old,true);store.save(old);if(['WAITING_START','WAITING_REVIEW','MERGED'].includes(old.state))store.set('reply-recovery-required:'+old.id,'1');continue;} // Preserve current plans, tasks and approvals; delivery identity is backfilled separately.
             const oldState=old.state,oldBlocked=old.blockedPhase;
@@ -38,9 +38,9 @@ export async function migrate(config: Config, store: Store, registry: ProjectReg
             if(source==='2'&&s.state==='WAITING_REVIEW'){s.needsRefresh='review';s.reviewNotice=undefined;s.state='QUEUED';}
             ensureWorkflow(s,true);store.save(s);
         }
-        store.set('schema_version','6');
+        store.set('schema_version','7');
         for (const s of store.sessions())
-            if (s.needsRefresh) {
+            if (!['5','6'].includes(source) && s.needsRefresh) {
                 for (const old of store.jobs().filter(j => j.sessionId === s.id && ['queued', 'running'].includes(j.status))) {
                     old.status = 'failed';
                     store.saveJob(old);
@@ -53,5 +53,5 @@ export async function migrate(config: Config, store: Store, registry: ProjectReg
                 store.notify(s, 'migration', '控制器已升级自然语言入口：旧待确认通知失效，将重新发送版本通知；开发会话、分支、SHA 和证据保留。');
             }
     });
-    return {version:6,sourceVersion:source,backup};
+    return {version:7,sourceVersion:source,backup};
 }

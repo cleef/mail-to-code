@@ -32,7 +32,7 @@ export function advanceDocumentation(s:Session):boolean{
 export function advanceRequestedStage(s:Session):boolean{
  return !!s.conversation?.requests.some(r=>r.stageId===s.workflow?.stageId)&&advanceCompletedStage(s);
 }
-function advanceCompletedStage(s:Session):boolean{
+export function advanceCompletedStage(s:Session):boolean{
  const w=s.workflow;
  if(!['MERGED','DONE'].includes(s.state)||!w?.proposal||!s.targets?.length||s.targets.some(t=>!t.mergeSha)||s.mergeUncertain||s.partialMerge||s.targets.some(t=>t.manualMerge||t.deployUncertain)||w.history.some(h=>h.id===w.stageId))return false;
  const stage:WorkflowStage={id:w.stageId,number:w.number,proposal:structuredClone(w.proposal),guide:structuredClone(w.guide),summary:s.summary,confirmedPlan:w.confirmedPlan,documentVersion:s.documentVersion,documents:structuredClone(w.documents),targets:structuredClone(s.targets),references:structuredClone(s.references||[]),mergeOrder:[...(s.mergeOrder||[])],planNotice:s.planNotice,reviewNotice:s.reviewNotice,mergeNotice:s.mergeNotice,planManifest:s.planManifest,reviewManifest:s.reviewManifest,analysisThreadId:s.analysisThreadId,completedAt:new Date().toISOString()};

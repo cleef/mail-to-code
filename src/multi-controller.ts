@@ -1,17 +1,16 @@
 import { mkdir, writeFile, realpath } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { Controller, safeError } from './controller.js';
-import { directive } from './mail.js';
 import { ProjectRegistry, digest, type PreparedProject } from './projects.js';
 import { ProjectMemoryService } from './memory.js';
 import { validateProfile } from './profile.js';
 import type { Session, Incoming, Job, RepoExecution } from './types.js';
 import type { RunResult } from './runner.js';
 import { planManifest, type MultiWork } from './multi-work.js';
-import {currentBinding,replyBinding,bindingValid} from './approval.js';
-import {ensureWorkflow,readWorkflowGuide,stageBinding,stageLabel,advanceDocumentation,advanceRequestedStage,WorkflowProposalSchema} from './workflow.js';
-import {toDecision,bareConfirmation} from './reply-interpreter.js';
-import type {ReplyDecision,ReplyRecord,MailQuestion,ReplyContext,ApprovalBinding} from './types.js';
+import {currentBinding,replyBinding,bindingValid,approvalVersion} from './approval.js';
+import {ensureWorkflow,readWorkflowGuide,stageBinding,stageLabel,advanceCompletedStage,WorkflowProposalSchema} from './workflow.js';
+import {isSemanticDecision,validateDecision} from './reply-interpreter.js';
+import type {SemanticDecision,ExecutionFact,MailQuestion,ReplyContext,ApprovalBinding} from './types.js';
 const fingerprint = (t: RepoExecution) => digest({ profile: t.profile, baseBranch: t.baseBranch, mergeMethod: t.mergeMethod || 'merge', deployment: t.deployment });
 export function manifest(s: Session) { return digest({ ...stageBinding(s), documents: s.documentVersion, order: s.mergeOrder, references:(s.references||[]).map(t=>({identity:t.identity,base:t.baseSha,profile:t.profileVersion})), targets: s.targets!.map(t => ({ identity: t.identity,...(s.workflow&&!s.workflow.legacy?{mode:t.auxiliary?'evidence':'model',evidence:!!t.recordEvidence}:{}), profile: t.profileVersion, base: t.baseSha, head: t.reviewSha, pr: t.prNumber, checks: t.checks, pending: t.pendingChecks, merged: t.mergeSha, deploy: t.deployment })) }); }
 export class MultiController extends Controller {
@@ -38,7 +37,6 @@ export class MultiController extends Controller {
             throw new Error(`项目 ${t.projectId} 的配置或身份已变化，请回复意见获取新方案`);
     } }
     private assertReferences(s:Session){for(const t of s.references||[])if(this.registry.changed(t))throw new Error('只读参考配置变化，需新方案和 START');}
-    private systemReply(incoming: Incoming, text: string) { const s: Session = { id: this.store.newId(), repo: '', title: 'PROJECTS', subject: incoming.subject, state: 'DONE', createdAt: new Date().toISOString(), initialMessageId: incoming.id, initialRfcId: incoming.rfcId, initialThreadId: incoming.threadId, threadId: incoming.threadId, summary: text, cancellationEpoch: 0, revision: 0, system: true }; this.store.save(s); if(text)this.store.notify(s, 'projects', text); return s; }
     override handle(incoming: Incoming) {
         this.store.transaction(() => {
             if (this.store.seen(incoming.id))
@@ -67,60 +65,38 @@ export class MultiController extends Controller {
             let s = candidates.size ? this.store.session([...candidates][0]) : undefined;
             if (s?.system)
                 s = undefined;
-            if (!s && /^PROJECTS$/i.test(incoming.subject.trim())) {
-                s=this.systemReply(incoming,'');
-                this.store.enqueue(s,'catalog','');
-            }
-            else {
-                const action = directive(incoming.subject, incoming.text, !!s);
-                if (!s && action.type === 'new') {
-                    if (id || incoming.inReplyTo || /^(?:re|回复|答复)\s*[:：]/i.test(incoming.subject)) {
-                        s=this.systemReply(incoming,'未找到被回复的任务，请回复任务最新通知；要启动新任务，请新建邮件并描述需求。');
-                    } else {
-                        const taskId=this.store.newId(), explicitProductId=/^PRODUCT:\s*([A-Z][A-Z0-9_-]*-\d+)\s*$/mi.exec(incoming.text)?.[1]?.toUpperCase();
-                        const hints=[...new Set([action.repo,...(/^PROJECTS:\s*(.+)$/mi.exec(incoming.text)?.[1]||'').split(/[,，\s]+/)].filter(Boolean))];
-                        s={id:taskId,repo:'',title:action.title,state:'QUEUED',subject:`[${taskId}] ${action.title}`,createdAt:new Date().toISOString(),initialMessageId:incoming.id,initialRfcId:incoming.rfcId,initialThreadId:incoming.threadId,
-                          summary:incoming.text||action.title,originalRequest:incoming.subject+'\n'+incoming.text,explicitProductId,productId:explicitProductId,projectHints:hints,targets:[],references:[],mergeOrder:[],directRunRequested:action.run,blockedPhase:'plan',cancellationEpoch:0,revision:0};
-                        ensureWorkflow(s);
-                        this.store.save(s);
-                        this.store.recordProgress(s,'ack',`已收到 ${taskId}：${action.title}\n先只读探索相关项目并返回方案，回复最新方案 START 后开发。${action.run?'\nRUN 将先核对精确项目及已确认配置；未接入时仍返回方案。':''}\n回复 STATUS 或 CANCEL。`);
-                        this.store.enqueue(s,'plan',incoming.text||action.title);
-                    }
-                }
-                else if (!s && action.type==='invalid') s=this.systemReply(incoming,action.reason);
-                else if (s) {
-                    this.advanceReplies(s);
-                    if (action.type === 'invalid') {
-                        if(incoming.text.trim()&&action.reason.includes('控制命令请单独'))this.enqueueReply(s,incoming);
-                        else this.help(s,action.reason);
-                    }
-                    else if (action.type === 'command' && (['CANCEL','RETRY','STATUS'].includes(action.command)||!this.intentPending(s.id)))
-                        this.applyCommand(s, action.command, replyBinding(this.store,s,incoming.inReplyTo), incoming.inReplyTo, action.project);
-                    else if (action.type === 'feedback'||action.type==='command')
-                        this.enqueueReply(s,incoming,action.type==='command'?action.command:undefined,action.type==='command'?action.project:undefined);
-                }
+            if (!s) {
+                const taskId=this.store.newId(), title=incoming.subject.trim()||'新需求';
+                s={id:taskId,repo:'',title,state:'QUEUED',subject:`[${taskId}] ${title}`,createdAt:new Date().toISOString(),initialMessageId:incoming.id,initialRfcId:incoming.rfcId,initialThreadId:incoming.threadId,threadId:incoming.threadId,summary:incoming.text||title,originalRequest:incoming.subject+'\n'+incoming.text,targets:[],references:[],mergeOrder:[],blockedPhase:'plan',cancellationEpoch:0,revision:0};
+                ensureWorkflow(s);this.store.save(s);
+                this.store.recordProgress(s,'ack','已接收，等待 Codex 理解新邮件。');
+                this.enqueueReply(s,incoming);
+                const job=this.store.jobs().at(-1)!;job.reply!.mode='intake';
+                if(id||incoming.inReplyTo)job.reply!.facts=[{code:'guard_rejected',text:'回复指向的任务或通知不存在；不可据此授予执行权限。'}];
+                this.store.saveJob(job);
+            } else {
+                this.advanceReplies(s);
+                this.enqueueReply(s,incoming);
             }
             this.store.remember(incoming.id, incoming.rfcId, incoming.threadId, s?.id, s ? 'accepted' : 'unrouted');
             if (s)
                 this.store.event(s.id, 'mail_received', { messageId: incoming.id });
         });
     }
-    private multiFeedback(s: Session, text: string) {
+    private multiFeedback(s: Session, text: string, phase:'plan'|'develop') {
+        if(!['plan','develop'].includes(phase)){this.help(s,'旧待处理反馈缺少 Codex 的阶段决策，不能据此写入。');return;}
         if (s.mergeUncertain||s.targets?.some(t=>t.deployUncertain)||s.targets?.some(t => t.mergeSha) || ['MERGING', 'MERGED', 'DEPLOYING', 'DONE', 'CANCELLED'].includes(s.state)) {
             this.help(s,'已进入合并阶段的仓库只读；额外修改请作为后续需求提出。');
             return;
         }
-        // A restarted controller has no inventory cache; execution resolves paths
-        // before checking versions. A cache miss does not change a dev conversation.
-        const configurationChanged = (s.targets||[]).some(t => this.registry.entries.has(t.projectId)&&this.registry.changed(t));
-        const phase = configurationChanged || s.blockedPhase === 'plan' || ['PLANNING', 'WAITING_START'].includes(s.state) ? 'plan' : 'develop';
-        // Additional repository declarations always return to planning; never silently widen write access.
-        const declared = [...text.matchAll(/^PROJECTS:\s*(.+)$/gmi)].flatMap(m=>m[1].split(/[,，\s]+/).filter(Boolean).map(v=>v.toLowerCase()));
-        if(declared.length)s.projectHints=[...new Set([...(s.projectHints||[]),...declared])];
+        // The model selects the phase; guards may refuse but cannot reinterpret feedback.
+        if(phase==='develop'&&(s.workflow&&!s.workflow.confirmed&&!s.workflow.legacy||[...(s.targets||[]),...(s.references||[])].some(t=>this.registry.entries.has(t.projectId)&&this.registry.changed(t)))){
+            this.help(s,'修改尚未绑定有效确认范围或配置已变化；需要先规划并重新确认。');return;
+        }
         s.reviewNotice = undefined;
         s.planNotice = undefined;
         s.lastError = undefined;
-        s.blockedPhase = declared.length ? 'plan' : phase;
+        s.blockedPhase = phase;
         this.store.save(s);
         this.store.enqueue(s, s.blockedPhase, text);
     }
@@ -128,7 +104,7 @@ export class MultiController extends Controller {
         const refuse = (v: string) => this.help(s,v);
         if (command === 'STATUS') {
             const text=s.lastError?`当前阻塞：${s.lastError}`:`当前状态：${s.state}。${s.mailBrief?.changes.length?'最近变化见下方。':'暂无新的阶段变化。'}`;
-            if(this.collectedStatus)this.collectedStatus.push(text);else this.store.notify(s,'status',text);
+            if(this.collectedStatus)this.collectedStatus.push(text);this.store.recordProgress(s,'status-requested',text);
             return;
         }
         if (command === 'CANCEL') {
@@ -143,10 +119,10 @@ export class MultiController extends Controller {
                 j.status = 'cancelled';
                 this.store.saveJob(j);
             }
-            if(this.intentActive?.job.sessionId===s.id)this.intentActive.abort.abort();
+
             if (this.multiActive?.job.sessionId === s.id)
                 this.multiActive.abort.abort();
-            refuse('任务已取消，保留各仓库分支、证据与已经发生的合并；发出的合并请求仍须核对。');
+            this.store.recordProgress(s,'cancel','任务已取消，保留已有分支与已知外部结果。');
             return;
         }
         if (command === 'START') {
@@ -225,19 +201,38 @@ export class MultiController extends Controller {
     }
     private earlierReply(job:Job){const jobs=this.store.jobs(),index=jobs.findIndex(j=>j.id===job.id);return jobs.slice(0,index).some(j=>j.sessionId===job.sessionId&&j.kind==='interpret'&&!['done','cancelled'].includes(j.status));}
     private intentPending(id:string){return this.store.jobs().some(j=>j.sessionId===id&&j.kind==='interpret'&&['queued','running'].includes(j.status));}
-    private enqueueReply(s:Session,incoming:Incoming,command?:string,project?:string){
+    private enqueueReply(s:Session,incoming:Incoming){
         const job=this.store.enqueue(s,'interpret',incoming.text);
         const parent=this.store.replyMail(incoming.inReplyTo);
-        job.reply={incoming:structuredClone(incoming),epoch:s.cancellationEpoch,stageId:s.workflow?.stageId,binding:replyBinding(this.store,s,incoming.inReplyTo),command,project,parent:parent?.status==='sent'&&parent.sessionId===s.id&&parent.identityStatus==='verified'?{id:parent.id,text:parent.text,questions:(parent.questions||[]).filter(q=>!s.conversation?.answered.includes(q.id))}:undefined};job.reply.previous=this.store.mails().filter(m=>m.sessionId===s.id&&m.id!==parent?.id&&m.status==='sent'&&m.identityStatus==='verified').slice(-4).map(m=>({id:m.id,text:m.text,questions:(m.questions||[]).filter(q=>!s.conversation?.answered.includes(q.id))}));this.store.saveJob(job);
+        job.reply={incoming:structuredClone(incoming),epoch:s.cancellationEpoch,stageId:s.workflow?.stageId,binding:replyBinding(this.store,s,incoming.inReplyTo),parent:parent?.status==='sent'&&parent.sessionId===s.id&&parent.identityStatus==='verified'?{id:parent.id,text:parent.text,questions:(parent.questions||[]).filter(q=>!s.conversation?.answered.includes(q.id))}:undefined};job.reply.previous=this.store.mails().filter(m=>m.sessionId===s.id&&m.id!==parent?.id&&m.status==='sent'&&m.identityStatus==='verified').slice(-4).map(m=>({id:m.id,text:m.text,questions:(m.questions||[]).filter(q=>!s.conversation?.answered.includes(q.id))}));this.store.saveJob(job);
     }
-    private help(s:Session,text:string,questions?:ReplyDecision['questions'],source?:string){
+    private decisionSnapshot(s:Session){return digest({state:s.state,epoch:s.cancellationEpoch,stage:s.workflow?.stageId,plan:approvalVersion(s,'START'),review:approvalVersion(s,'APPROVE'),merge:approvalVersion(s,'DEPLOY')});}
+    private observe(s:Session,facts:ExecutionFact[],candidate?:ReplyContext['candidate']){
+        const job=this.store.enqueue(s,'interpret','理解执行事实并决定是否需要人回复');
+        job.reply={mode:'outcome',facts,candidate,snapshot:this.decisionSnapshot(s),epoch:s.cancellationEpoch,stageId:s.workflow?.stageId,incoming:{id:job.id,rfcId:'',inReplyTo:'',threadId:s.threadId||s.initialThreadId,subject:s.subject,text:'',from:this.config.ownerAddress,trusted:true}};
+        this.store.saveJob(job);return job;
+    }
+    private help(s:Session,text:string){
         if(this.collectedHelp){this.collectedHelp.push(text);return;}
-        const binding=currentBinding(s);
-        const specs=(questions!==undefined?questions:binding?[{text:binding.action==='START'?'确认按当前方案实施':binding.action==='APPROVE'?'确认合并当前 Review 的完整清单':'发布已合并版本；多个项目请指定目标',kind:binding.action==='DEPLOY'&&(s.targets?.length||0)>1?'choice' as const:'confirm' as const,action:binding.action,dependsOn:[]}]:[]).map(q=>q.kind==='confirm'&&q.action!=='future'&&q.action!==binding?.action?{...q,kind:'open' as const,action:undefined}:q);
-        return this.store.notify(s,'help',text,[],{binding,questions:specs.map(q=>({...q,dependsOn:source?q.dependsOn.map(id=>source+'/'+id):[],binding:q.kind==='confirm'&&q.action===binding?.action?binding:undefined}))});
+        this.store.recordProgress(s,'guard-rejected',text);
+        this.observe(s,[{code:'guard_rejected',text}]);
     }
-    private input(s:Session,text:string,questions:string[]){
-        this.store.notify(s,'input',text,[],{questions:questions.map(text=>({text,kind:'open',dependsOn:[]}))});
+    private input(s:Session,text:string,questions:string[]){this.observe(s,[{code:'outcome',text}],{kind:'input',text,questions});}
+    private announce(s:Session,kind:string,text:string,attachments:import('./types.js').Attachment[]=[]){
+        const action=kind==='plan'?'START':kind==='review'?'APPROVE':kind==='merge'&&s.workflow?.proposal?.kind!=='documentation'?'DEPLOY':undefined;
+        this.observe(s,[{code:'outcome',text}],{kind,text,attachments,action,version:action?approvalVersion(s,action):undefined});
+    }
+    private communicate(s:Session,decision:SemanticDecision,context:ReplyContext){
+        this.store.recordProgress(s,'semantic-decision',JSON.stringify({communication:decision.communication,nextStep:decision.nextStep,questions:decision.questions}));
+        if(decision.communication.kind==='internal')return;
+        const candidate=context.candidate;
+        if(decision.communication.kind==='ask_human'&&candidate&&['plan','review'].includes(candidate.kind)){s.state='WAITING_INPUT';s.blockedPhase=candidate.kind==='plan'?'plan':'develop';s.planNotice=undefined;s.reviewNotice=undefined;this.store.save(s);}
+        const action=decision.communication.kind==='confirmation'||decision.communication.kind==='final_result'&&candidate?.kind==='merge'?candidate?.action:undefined;
+        if(action&&candidate?.version!==approvalVersion(s,action))throw Error('REPLY_CONFIRMATION_STALE');
+        const kind=action?candidate!.kind:decision.communication.kind==='requested_status'?(candidate?.kind==='projects'?'projects':'status'):decision.communication.kind==='final_result'?(candidate?.kind||'result'):(candidate&&['plan','review'].includes(candidate.kind)?'input':candidate&&['input','config-change','failure'].includes(candidate.kind)?candidate.kind:'help');
+        const existing=currentBinding(s);
+        const mail=this.store.notify(s,kind,decision.communication.text,candidate?.attachments||[],{preserveBinding:!!action,binding:action?undefined:existing,questions:decision.questions.map(q=>({...q,dependsOn:q.dependsOn.map(id=>context.incoming.id+'/'+id),binding:q.action===existing?.action?existing:undefined}))});
+        if(action){if(action==='START')s.planNotice=mail.id;else if(action==='APPROVE')s.reviewNotice=mail.id;else s.mergeNotice=mail.id;this.store.save(s);}
     }
     private applyCommand(s:Session,command:string,binding:ApprovalBinding|undefined,rawReply:string,project?:string){
         if(['START','APPROVE','DEPLOY'].includes(command)){
@@ -262,13 +257,26 @@ export class MultiController extends Controller {
     }
     override startNext():Promise<void>|undefined{
         if(this.stopped)return;
-        if(!this.intentActive){const job=this.store.jobs().find(j=>j.kind==='interpret'&&j.status==='queued'&&!(j.reply?.waitingForEarlier&&this.earlierReply(j)));if(job){job.status='running';this.store.saveJob(job);const abort=new AbortController();const promise=this.executeReply(job,abort.signal).finally(()=>{this.intentActive=undefined;}).then(async()=>{await this.startBusiness();});this.intentActive={job,abort,promise};return promise;}}
+        if(!this.intentActive){const job=this.store.jobs().find(j=>j.kind==='interpret'&&j.status==='queued'&&!(j.reply?.mode==='outcome'&&this.store.jobs().some(b=>b.sessionId===j.sessionId&&b.kind!=='interpret'&&b.status==='running'))&&!(j.reply?.waitingForEarlier&&this.earlierReply(j)));if(job){job.status='running';this.store.saveJob(job);const abort=new AbortController();const promise=this.executeReply(job,abort.signal).finally(()=>{this.intentActive=undefined;}).then(async()=>{await this.startBusiness();});this.intentActive={job,abort,promise};return promise;}}
         return this.startBusiness();
     }
-    private acceptDecision(s:Session,job:Job,decision:ReplyDecision,context:ReplyContext){
+    private acceptDecision(s:Session,job:Job,decision:SemanticDecision,context:ReplyContext){
+        if(context.mode==='outcome'){
+            if(decision.nextStep!=='wait'){
+                if(s.state==='CANCELLED'||s.mergeUncertain||s.targets?.some(t=>t.deployUncertain))throw Error('REPLY_NEXT_STAGE_GUARD');
+                if(decision.nextStep==='revise'&&decision.revisionPhase!=='plan')throw Error('REPLY_OUTCOME_CANNOT_AUTHORIZE');
+                if(!this.pending(s)){
+                    if(['MERGED','DONE'].includes(s.state)&&!advanceCompletedStage(s))throw Error('REPLY_NEXT_STAGE_GUARD');
+                    s.planNotice=undefined;s.reviewNotice=undefined;this.store.save(s);
+                    const retained=s.conversation?.records.filter(r=>context.facts?.some(f=>f.itemId===r.id)&&r.item.action==='feedback'&&r.item.clear&&r.status==='blocked'&&!r.jobIds?.length)||[];
+                    const plan=this.store.enqueue(s,'plan','Codex 根据执行事实决定只读规划；已有成果保留，写入需要当前阶段有效授权。\n'+retained.map(r=>r.item.text||r.item.evidence).join('\n'));
+                    for(const r of retained){r.revisionPhase='plan';r.status='queued';r.jobIds=[plan.id];}this.store.save(s);
+                }
+            }
+            this.communicate(s,decision,context);return;
+        }
         s.conversation ||= {records:[],requests:[],answered:[]};
-        const c=s.conversation,questions=[...decision.questions];
-        // A modification of the current delivery cannot approve that same delivery.
+        const c=s.conversation;
         const modifies=decision.items.some(i=>i.clear&&i.action==='feedback');
         const cancels=decision.items.some(i=>i.clear&&i.action==='cancel');
         const controls=decision.items.some(i=>i.clear&&['start','approve','deploy'].includes(i.action));
@@ -277,31 +285,31 @@ export class MultiController extends Controller {
             const allQuestions=[...(context.parent?.questions||[]),...(context.previous||[]).flatMap(m=>m.questions)];
             const referenced=item.questionRefs.map(id=>allQuestions.find(q=>q.id===id)).filter((q):q is MailQuestion=>!!q);
             const binding=context.parent?.questions.find(q=>item.questionRefs.includes(q.id)&&q.kind==='confirm'&&q.action===item.action.toUpperCase())?.binding||context.binding;
-            let reason=!item.clear||item.action==='clarify'?'该事项仍需补充说明':undefined;
-            if(item.questionRefs.some(id=>c.answered.includes(id)))reason='关联问题已处理，不重复执行。';
-            if(modifies&&['start','approve','deploy'].includes(item.action))reason='包含对当前交付物的修改，相关批准失效，请审阅更新后的版本。';
-            if(cancels&&controls&&['cancel','start','approve','deploy'].includes(item.action))reason='取消任务与继续执行冲突，请明确希望保留的动作。';
-            if(['start','approve','deploy'].includes(item.action)&&bareConfirmation(context.incoming.text)&&!referenced.some(q=>q.kind==='confirm'&&q.action===item.action.toUpperCase()&&q.binding))reason='旧邮件没有可整体确认的确定事项，请确认本次明确动作。';
-            const record:ReplyRecord={id,source:context.incoming.id,stageId:context.stageId,item:structuredClone(item),dependencies:referenced.flatMap(q=>q.dependsOn),binding,status:reason?'blocked':'accepted',reason};c.records.push(record);
-            if(reason&&!questions.some(q=>q.text===reason))questions.push({text:reason,kind:'open',dependsOn:[]});
+            let reason=!item.clear||item.action==='clarify'?'Codex 标记该事项尚不明确':undefined;
+            if(item.questionRefs.some(id=>c.answered.includes(id)))reason='关联问题已处理，不重复执行';
+            if(modifies&&['start','approve','deploy'].includes(item.action))reason='本轮修改使当前交付物的批准失效';
+            if(cancels&&controls&&['cancel','start','approve','deploy'].includes(item.action))reason='取消与批准执行同时出现，不能执行冲突动作';
+            c.records.push({id,source:context.incoming.id,stageId:context.stageId,item:structuredClone(item),dependencies:referenced.flatMap(q=>q.dependsOn),binding,status:reason?'blocked':'accepted',reason,revisionPhase:decision.revisionPhase||undefined});
         }
         this.store.save(s);this.collectedHelp=[];this.collectedStatus=[];
-        try{this.advanceReplies(s);}finally{const notes=this.collectedHelp,statuses=this.collectedStatus!;this.collectedHelp=undefined;this.collectedStatus=undefined;
+        try{this.advanceReplies(s);}finally{
+            const notes=this.collectedHelp!;this.collectedHelp=undefined;this.collectedStatus=undefined;
             const fresh=this.store.session(s.id)!;
             const records=fresh.conversation!.records.filter(r=>r.source===context.incoming.id);
-            for(const r of records.filter(r=>r.status==='blocked'))if(!questions.length){const b=currentBinding(fresh);const action=r.item.action.toUpperCase();questions.push(b&&b.action===action?{text:action==='START'?'确认按更新后的当前方案实施':action==='APPROVE'?'确认合并当前有效 Review 的完整清单':'请指定要发布的已合并项目',kind:action==='DEPLOY'?'choice':'confirm',action:b.action,dependsOn:[]}:{text:r.reason||'请补充该事项的处理要求',kind:'open',dependsOn:[]});}
-            const lines=records.map((r,n)=>`${n+1}. ${r.item.text||r.item.evidence}：${r.status==='queued'?'已批准并排队':r.status==='waiting'?'等待前置事项完成':r.status==='done'?'已处理':r.status==='blocked'?'待澄清':'已保留'}${r.reason?'（'+r.reason+'）':''}`);
-            // Accepted controls, edits and future requests are durable internal
-            // receipts. Only unresolved questions or actionable/final outcomes
-            // need an immediate email; requested STATUS joins the same reply.
-            const receipt=[...lines,...notes.filter(n=>!lines.some(l=>l.includes(n)))].join('\n');
-            this.store.recordProgress(fresh,'reply-receipt',receipt);
-            if(questions.length||notes.length)this.help(fresh,[receipt,...statuses].filter(Boolean).join('\n')||'本次回复尚有未决事项。',questions,context.incoming.id);
-            else if(statuses.length)this.store.notify(fresh,'status',statuses.join('\n'));
+            for(const r of records.filter(r=>r.status==='blocked'))r.factReported=true;this.store.save(fresh);
+            const facts:ExecutionFact[]=[...records.filter(r=>r.status==='blocked').map(r=>({code:'item_blocked' as const,itemId:r.id,item:r.item,text:r.reason!})),...notes.map(text=>({code:'guard_rejected' as const,text}))];
+            this.store.recordProgress(fresh,'reply-receipt',JSON.stringify(records));
+            if(facts.length){this.observe(fresh,facts,{kind:'reply-reconciliation',text:decision.communication.text,questions:decision.questions.map(q=>q.text),sourceDecision:decision});}
+            else this.communicate(fresh,decision,context);
+            if(decision.nextStep==='analyze'&&!this.pending(fresh)&&fresh.state!=='CANCELLED'){
+                if(['MERGED','DONE'].includes(fresh.state)&&!advanceCompletedStage(fresh))throw Error('REPLY_NEXT_STAGE_GUARD');
+                fresh.planNotice=undefined;fresh.reviewNotice=undefined;this.store.save(fresh);this.store.enqueue(fresh,'plan',fresh.originalRequest||fresh.summary);
+            }
         }
     }
     private advanceReplies(s:Session){
         const c=s.conversation;if(!c)return;
+        const ownsCollection=this.collectedHelp===undefined;if(ownsCollection)this.collectedHelp=[];
         const jobs=this.store.jobs();
         for(const r of c.records.filter(r=>r.status==='queued')){
             const effects=(r.jobIds||[]).map(id=>jobs.find(j=>j.id===id));
@@ -332,7 +340,8 @@ export class MultiController extends Controller {
                 ['accepted','waiting'].includes(q.status)&&
                 [...q.item.dependsOn.map(id=>q.source+'/'+id),...(q.dependencies||[])].every(id=>c.records.find(d=>d.id===id)?.status==='done')
             ):[r];
-            if(r.item.action==='feedback')this.multiFeedback(s,batch.map(q=>q.item.text||q.item.evidence).join('\n\n'));
+            if(r.item.action==='feedback')this.multiFeedback(s,batch.map(q=>q.item.text||q.item.evidence).join('\n\n'),r.revisionPhase!);
+            else if(r.item.action==='catalog'){s.system=true;this.store.save(s);this.store.enqueue(s,'catalog','');}
             else this.applyCommand(s,r.item.action.toUpperCase(),r.binding,r.binding?.noticeId||'',r.item.project);
             const added=this.store.jobs().filter(j=>j.sessionId===s.id&&(j.kind!=='interpret'||r.item.action==='retry')&&j.status==='queued'&&!before.some(b=>b.id===j.id&&b.status==='queued'));
             for(const record of batch){
@@ -343,33 +352,40 @@ export class MultiController extends Controller {
                 if(['queued','done'].includes(record.status))for(const q of record.item.questionRefs)if(!c.answered.includes(q))c.answered.push(q);
             }
         }
-        if(!this.pending(s)&&advanceRequestedStage(s)){this.store.enqueue(s,'plan','已合并当前完整阶段；根据保留的后续要求只读生成下一方案，等待新 START。');this.store.event(s.id,'requested_stage_completed',{next:s.workflow!.stageId});}
         this.store.save(s);
+        if(ownsCollection){
+            const notes=this.collectedHelp!;this.collectedHelp=undefined;
+            const blocked=c.records.filter(r=>r.status==='blocked'&&!r.factReported);
+            for(const r of blocked)r.factReported=true;this.store.save(s);
+            const facts:ExecutionFact[]=[...blocked.map(r=>({code:'item_blocked' as const,itemId:r.id,item:r.item,text:r.reason||'执行被守卫阻止'})),...notes.map(text=>({code:'guard_rejected' as const,text}))];
+            if(facts.length)this.observe(s,facts);
+        }
     }
     private async executeReply(job:Job,signal:AbortSignal){
         try{
             const context=job.reply;if(!context)throw Error('REPLY_CONTEXT_MISSING');
             const snapshot=this.store.session(job.sessionId)!;
             if(snapshot.cancellationEpoch!==context.epoch||(context.stageId&&context.stageId!==snapshot.workflow?.stageId)){job.status='cancelled';this.store.saveJob(job);return;}
-            const result=context.command?undefined:context.result||await this.multiWork.interpretReply(snapshot,context,signal);
+            // Old pending command/result envelopes are reinterpreted. Applied jobs are never replayed.
+            const result=isSemanticDecision(context.result)?context.result:await this.multiWork.interpretReply(snapshot,context,signal);
             signal.throwIfAborted();
-            if(result){context.result=result;this.store.saveJob(job);}
+            const decision=validateDecision(JSON.parse(JSON.stringify(result,(_k,v)=>v===undefined?null:v)),context,snapshot);
+            context.result=decision;delete context.command;delete context.project;this.store.saveJob(job);
             this.store.transaction(()=>{
                 const s=this.store.session(job.sessionId)!;
-                const action=context.command||(!result?undefined:'items' in result?(result.items.every(i=>['status','cancel','retry'].includes(i.action))?'STATUS':undefined):result.action.toUpperCase());
                 if(s.cancellationEpoch!==context.epoch||(context.stageId&&context.stageId!==s.workflow?.stageId)){job.status='cancelled';this.store.saveJob(job);return;}
-                if(s.state==='CANCELLED'&&action!=='STATUS'){this.help(s,'任务已取消；查询可以继续，新需求请新建邮件。');job.status='done';this.store.saveJob(job);return;}
-                if(this.earlierReply(job)&&!['STATUS','CANCEL','RETRY'].includes(action||'')){context.waitingForEarlier=true;job.status='queued';this.store.saveJob(job);this.help(s,'之前的回复理解尚未完成，当前确认暂存；请先 RETRY 或 CANCEL。');return;}
+                if(context.mode==='outcome'&&context.snapshot&&context.snapshot!==this.decisionSnapshot(s)){job.status='done';this.store.saveJob(job);this.store.recordProgress(s,'stale-observation','执行事实已被后续版本替代，不发送旧确认。');return;}
+                const immediate=decision.items.length>0&&decision.items.every(i=>['status','cancel','retry'].includes(i.action));
+                if(this.earlierReply(job)&&!immediate){context.waitingForEarlier=true;job.status='queued';this.store.saveJob(job);this.store.recordProgress(s,'reply-waiting','等待先前回复处理');return;}
                 context.waitingForEarlier=false;
-                if(context.command)this.applyCommand(s,context.command,context.binding,context.incoming.inReplyTo,context.project);
-                else this.acceptDecision(s,job,toDecision(result!),context);
-                job.status='done';this.store.saveJob(job);this.store.event(s.id,'reply_interpreted',{messageId:context.incoming.id,action:context.command||('items' in result!?result.items.map(i=>i.action):result?.action)});
+                this.acceptDecision(s,job,decision,context);
+                job.status='done';this.store.saveJob(job);this.store.event(s.id,'reply_interpreted',{messageId:context.incoming.id,action:decision.items.map(i=>i.action),communication:decision.communication.kind});
             });
         }catch(e){
             const saved=this.store.jobs().find(j=>j.id===job.id)!;if(saved.status==='cancelled')return;
             job.status=this.store.session(job.sessionId)?.state==='CANCELLED'?'cancelled':signal.aborted?'queued':'failed';this.store.saveJob(job);
             this.store.run(job.id,job.sessionId,{kind:'interpret',status:job.status,error:safeError(e)});
-            if(!signal.aborted)this.help(this.store.session(job.sessionId)!,'回复理解失败：'+safeError(e)+'；任务状态未改变。回复 RETRY 重试这封回复，或直接发送明确英文命令。');
+            if(!signal.aborted&&!this.store.get('semantic-failure:'+job.id)){this.store.notify(this.store.session(job.sessionId)!,'failure','Codex 理解未完成：'+safeError(e)+'。本次未完成的语义动作已停止；管理员检查服务后重试。');this.store.set('semantic-failure:'+job.id,'1');}
         }
     }
     private async analyzePlan(s:Session,job:Job,signal:AbortSignal,save:()=>void,alive:()=>Session){
@@ -392,7 +408,7 @@ export class MultiController extends Controller {
             if(proposal.decision==='clarify'||result.outcome!=='plan_ready'||proposal.decision!=='complete'&&result.questions.length){input(result.summary,result.questions);return;}
             if(proposal.decision==='complete'){
                 if((s.targets||[]).some(t=>t.worktree&&!t.mergeSha)){input(result.summary,['仍有未合并阶段成果，请先审阅或明确取消，不能将其标为完成。']);return;}
-                s.state='DONE';s.summary=result.summary;save();this.store.notify(s,'complete',result.summary+'\n已完成阶段：'+workflow.history.map(h=>h.proposal.name).join(' → ')+'\n未执行额外开发、合并或发布。');return;
+                s.state='DONE';s.summary=result.summary;save();this.announce(s,'complete',result.summary+'\n已完成阶段：'+workflow.history.map(h=>h.proposal.name).join(' → ')+'\n未执行额外开发、合并或发布。');return;
             }
             if(!proposal.deliverables.length||!proposal.acceptance.length)throw Error('阶段方案必须声明交付物和验收方式');
             workflow.proposal=proposal;
@@ -453,7 +469,7 @@ export class MultiController extends Controller {
             s.planManifest=planManifest(s);save();
             if(missing.length){input(result.summary,['接入条件缺失：',...missing]);return;}
             await this.multiWork.verifyPlan(s,this.registry,signal);alive();
-            s.state='WAITING_START';s.planNotice=this.store.notify(s,'plan',s.summary).id;save();return;
+            s.state='WAITING_START';this.announce(s,'plan',s.summary);save();return;
         }
         input(s.summary,['分析连续改变项目或配置，尚未形成稳定方案，请补充范围。']);
     }
@@ -469,17 +485,9 @@ export class MultiController extends Controller {
         try {
             this.store.run(job.id, s.id, { kind: job.kind, status: 'running', startedAt: new Date().toISOString() });
             if(job.kind==='catalog'){
-                await this.registry.scan(true,{sync:true,signal});alive();this.store.notify(s,'projects',this.registry.list());job.status='done';this.store.saveJob(job);return;
+                await this.registry.scan(true,{sync:true,signal});alive();this.announce(s,'projects',this.registry.list());job.status='done';this.store.saveJob(job);return;
             }
             if(job.kind==='plan'){
-                if(s.directRunRequested && s.projectHints?.length){
-                    s.directRunRequested=false;
-                    try{
-                        const targets=[];for(const hint of s.projectHints){if(!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(hint))throw new Error('RUN requires exact aliases');const p=await this.multiWork.prepareProject(hint,this.registry,signal);if(!p.ready)throw new Error('Profile not confirmed');targets.push(this.registry.target(p));}
-                        if(s.productId){const p=await this.multiWork.prepareProject(this.config.productDocs,this.registry,signal);if(!p.ready)throw new Error('Product profile not confirmed');if(!targets.some(t=>t.identity===p.identity))targets.push({...this.registry.target(p),auxiliary:true});}
-                        s.targets=targets;s.repo=targets[0].projectId;s.mergeOrder=targets.map(t=>t.projectId);s.profileVersions=Object.fromEntries(targets.map(t=>[t.projectId,t.profileVersion]));save();job.kind='develop';this.store.saveJob(job);
-                    }catch{save();this.store.recordProgress(s,'run-plan','RUN 未实施：需要确认项目或接入配置，将发送新方案。');}
-                }
                 if(job.kind==='plan'){await this.analyzePlan(s,job,signal,save,alive);job.status='done';this.store.saveJob(job);this.store.run(job.id,s.id,{kind:'plan',status:'done'});return;}
             }
             if(s.pendingStart){
@@ -528,12 +536,7 @@ export class MultiController extends Controller {
                 s.state = 'MERGED';
                 s.partialMerge = false;
                 s.summary = s.targets!.map(t => `${t.projectId}: ${t.prUrl}\nMerged commit: ${t.mergeSha}`).join('\n\n');
-                if(s.workflow?.proposal?.kind==='documentation'){
-                    s.mergeNotice=undefined;
-                    this.store.recordProgress(s,'merge','文档阶段已合并，接下来只读分析下一步；新阶段需要新的 START。');
-                }else{
-                    s.mergeNotice=this.store.notify(s,'merge',`发布需单独回复 ${s.targets!.length > 1 ? 'DEPLOY <项目别名>' : 'DEPLOY'}；仅启用的目标可发布。`).id;
-                }
+                this.announce(s,'merge',s.summary);
                 save();
             }
             else if (job.kind === 'deploy') {
@@ -541,14 +544,14 @@ export class MultiController extends Controller {
                 if(!t?.mergeSha || t.manualMerge)throw new Error('Deployment target invalid');
                 if(this.registry.changed(t)){
                     const p=this.registry.get(t.projectId);t.deployment=p.deployment;t.profile=structuredClone(p.profile);t.profileVersion=p.version;
-                    s.state='MERGED';s.mergeNotice=this.store.notify(s,'merge',`发布配置已变化：${t.displayName||t.projectId}\n提交：${t.mergeSha}\n发布域名：${t.deployment?.domain||'未配置'}；${t.deployment?.enabled?'发布已启用':'发布未启用'}\n请回复本通知 DEPLOY ${t.projectId} 重新授权。`).id;save();job.status='done';this.store.saveJob(job);return;
+                    s.state='MERGED';this.announce(s,'merge',`发布配置已变化：${t.displayName||t.projectId}\n提交：${t.mergeSha}\n发布域名：${t.deployment?.domain||'未配置'}；${t.deployment?.enabled?'发布已启用':'发布未启用'}\n请回复本通知 DEPLOY ${t.projectId} 重新授权。`);save();job.status='done';this.store.saveJob(job);return;
                 }
                 if(!t.deployment?.enabled)throw new Error('发布 adapter 未启用');
                 await this.multiWork.deploy(s, t, signal);
                 alive();
                 s.state = s.targets!.filter(t => t.deployment?.enabled).every(t => t.deployed) ? 'DONE' : 'MERGED';
                 save();
-                this.store.notify(s, 'deployed', `${t.projectId} 已发布并验证提交 ${t.mergeSha}`);
+                this.announce(s, 'deployed', `${t.projectId} 已发布并验证提交 ${t.mergeSha}`);
             }
             else {
                 const phase='develop', revalidate=job.feedback==='__REVALIDATE__';
@@ -588,7 +591,7 @@ export class MultiController extends Controller {
                         s.state = 'WAITING_INPUT';
                         s.blockedPhase = 'plan';
                         save();
-                        this.store.notify(s, 'config-change', `执行配置需要变化；回复意见重新生成方案并 START，不沿用原配置批准。`);
+                        this.announce(s, 'config-change', `执行配置需要变化；回复意见重新生成方案并 START，不沿用原配置批准。`);
                         break;
                     }
                     if (result.requestedProjects?.some(alias => !s.targets!.some(t => t.projectId === alias))) {
@@ -619,16 +622,12 @@ export class MultiController extends Controller {
                         s.partialMerge = s.targets!.some(t => !!t.mergeSha);
                         s.blockedPhase = undefined;
                         s.reviewManifest = manifest(s);
-                        s.reviewNotice = this.store.notify(s, 'review', s.summary, s.targets!.flatMap(t => t.attachments || [])).id;
+                        this.announce(s, 'review', s.summary, s.targets!.flatMap(t => t.attachments || []));
                     save();
                 }
             }
             this.store.transaction(()=>{
                 const completedStage=s.workflow?.stageId;
-                if(job.kind==='merge'&&advanceDocumentation(s)){
-                    this.store.save(s);this.store.enqueue(s,'plan','上一文档阶段已合并。根据原需求与已完成阶段只读判断下一步；不沿用旧 START，也不自动发布。');
-                    this.store.event(s.id,'stage_completed',{stage:completedStage,next:s.workflow!.stageId});
-                }
                 job.status='done';this.store.saveJob(job);
                 this.store.run(job.id,s.id,{kind:job.kind,status:'done',stage:completedStage,finishedAt:new Date().toISOString(),manifest:s.reviewManifest});
             });
@@ -677,7 +676,7 @@ export class MultiController extends Controller {
                 this.store.save(current);
                 this.store.enqueue(current, 'develop', '__REVALIDATE__');
             }
-            this.store.notify(current, 'failure', `${current.id}: ${current.lastError}\n${current.targets!.map(t => `${t.projectId}: ${t.mergeSha ? '已合并 ' + t.mergeSha : '尚未合并'}`).join('\n')}\n${job.kind === 'merge' ? '旧批准失效；先核对不确定结果，再 RETRY 重新验证并等待新 APPROVE。' : '修复条件后 RETRY，或回复补充意见。'}`);
+            this.announce(current, 'failure', `${current.id}: ${current.lastError}\n${current.targets!.map(t => `${t.projectId}: ${t.mergeSha ? '已合并 ' + t.mergeSha : '尚未合并'}`).join('\n')}\n${job.kind === 'merge' ? '旧批准失效；先核对不确定结果，再 RETRY 重新验证并等待新 APPROVE。' : '修复条件后 RETRY，或回复补充意见。'}`);
         }
     }
     override async stop() { this.stopped = true; if(this.intentActive)this.intentActive.abort.abort(); if (this.multiActive) {

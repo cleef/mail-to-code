@@ -16,7 +16,7 @@ Preserve the old deployment and cutover backup for 30 days. Do not delete a stil
 
 ## Recovery
 
-Before the new controller performs any effects, the stopped cutover snapshot can restore the old installation. After startup, inspect processed mail, outbox and external operations first. Prefer a tested build compatible with the current database and profile format, keeping the current database. Never restore an earlier snapshot blindly, replay historical approvals, or run a v5 controller against v6 state.
+Before the new controller performs any effects, the stopped cutover snapshot can restore the old installation. After startup, inspect processed mail, outbox and external operations first. Prefer a tested build compatible with the current database and profile format, keeping the current database. Never restore an earlier snapshot blindly, replay historical approvals, or run an older controller against v7 state.
 
 `reconcile-send`, `reconcile-merge` and `reconcile-deploy` resolve uncertain outcomes. Read their CLI output before retrying. `upgrade.sh` backs up and checks a reviewed revision; `rollback.sh` checks schema compatibility and never restores a database automatically. Format-specific compatibility still requires testing on a private database copy.
 
@@ -26,11 +26,34 @@ Intermediate notifications are stored as `notification_internal` events in the
 private SQLite `events` table, with their kind, text, stage and summary snapshot.
 They are not outbox entries, cannot be sent by `flush`, and do not replace an
 approval notice. Reply item status and dependencies remain in each task's
-conversation ledger. No schema migration is needed, and existing mail snapshots
-and delivery identities remain unchanged.
+conversation ledger. Historical mail snapshots and delivery identities remain unchanged. The v7
+semantic protocol requires a stopped migration and rejects older controllers;
+this prevents a rollback from restoring command shortcuts for new queued work.
 
-Document-stage merges are followed by read-only analysis; its next proposal,
+Codex receives known stage-merge facts and chooses whether to plan another step; its next proposal,
 question or completion is the next email. Code merge notices that authorize a
 separate deployment, cancellation results, failures and requested status replies
 remain visible to the owner. Automatic reanalysis invalidates old approval
 bindings immediately, even though the intermediate status is internal.
+
+## Semantic protocol upgrade
+
+V7 adds structured `nextStep`, `revisionPhase` and `communication` decisions to
+read-only interpretation jobs. All intake and commands use that path. Outcome
+jobs receive typed execution facts and can request read-only planning, but cannot
+authorize development, merge or deployment. The controller checks evidence,
+references, stage, current version, scope, uncertainty and idempotency. It does
+not rewrite intent or invent questions from a refusal.
+
+Migration preserves historical sessions, jobs, outbox, inbox and cursor. Pending
+old command/result envelopes are reinterpreted by Codex when processed. Done jobs
+and known effects are not replayed. Old pending feedback without a phase decision
+is guarded and returned to Codex rather than executed with an inferred phase.
+Rehearse this on a private copy before stopping an idle controller for the normal
+backup/migrate/doctor/manual upgrade. Edited private guides are preserved; the
+new contract lives in built-in instructions as well as fresh guide templates.
+
+If interpretation is unavailable, no mail-command fallback exists. One factual
+failure is stored per failed interpretation job. Check model connectivity before
+retrying; cancellation by email also needs Codex. Stop the service administratively
+if immediate shutdown is required. Never retry an uncertain external effect.

@@ -7,7 +7,7 @@ import {digest}from'./projects.js';
 
 // Operator-only import. Never handles email/model instructions or performs external effects.
 export async function adoptConfig(config:Config,store:Store,dryRun=false){
- if(store.get('schema_version')!=='6')throw Error('Migrate the database to v6 before adopting configuration');
+ if(store.get('schema_version')!=='7')throw Error('Migrate the database to v7 before adopting configuration');
  if(store.jobs().some(j=>['queued','running'].includes(j.status)))throw Error('Resolve queued/running jobs before adopting configuration');
  if(store.mails().some(m=>m.status!=='sent'))throw Error('Reconcile unsent or uncertain mail before adopting configuration');
  if(store.get('mail-to-code-adopted')==='1')return {alreadyAdopted:true,affected:[]};

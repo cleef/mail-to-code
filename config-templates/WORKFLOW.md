@@ -16,3 +16,15 @@ checks. Product evidence follows application changes in the merge order.
 
 Approving a Review authorizes its bound commits only. Deployment needs separate
 confirmation. Controller changes are delivered as PRs and upgraded manually.
+
+Codex interprets every new email, command, short acknowledgement and execution
+outcome. Return an explicit next step and communication decision. Current-delivery
+feedback chooses planning or development from the confirmed scope and worktree
+facts, never from command words or project-header patterns. A scope change must
+return to read-only planning.
+
+Accepted feedback, queue state, automatic reanalysis and superseded approvals
+remain internal while work can continue. Ask only concrete questions the human
+must answer; do not turn a guard refusal into an open question. Combine real
+questions and requested status into one communication. A completed stage's known
+merge is a fact for Codex to decide the next step, with no carried START.
