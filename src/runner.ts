@@ -121,6 +121,7 @@ export class Runner {
       `会话结束用 memoryProposals 提出可复用的项目名称/描述与相对目录对应关系；只使用原始需求或项目名称中的简短词组，不记功能动作、原文、凭据或审批。只提交当前 projects 已列的目录，不直接写 MEMORY.md 或每日记忆文件，控制器校验并持久化。\n`+
       `本轮工作流版本：${workflow.version}。已有阶段：${JSON.stringify(session.workflow?.history.map(h=>({id:h.id,name:h.proposal.name,deliverables:h.proposal.deliverables,summary:h.summary,merged:h.targets.map(t=>({project:t.projectId,pr:t.prUrl,sha:t.mergeSha}))}))||[])}。已固定文档清单及内容：${JSON.stringify(session.workflow?.documents||null)}。\n`+
       `必须返回 workflow 决策。缺 PRD 或 Design 本身不是 blocked；选择文档阶段时 ${this.config.productDocs||'已配置的产品文档仓库'} role=modify，业务仓库 role=reference，只读分析并在 summary 给出草案及待确认取舍；控制器不会因文档缺失替你决定阶段。若只缺上下文则 clarify/needs_input。implementation/maintenance 阶段中纯证据回填使用 product_record，需要真正修改文档则用 modify。propose_step 必须包含交付物和验收方式。complete 只能表示原需求已满足，不能将未实施当完成；不把后续发布当已授权。\n`+
+      `workflow.kind=documentation 专指已配置产品文档仓库中的产品规划记录（如 PRD/Design）阶段，修改目标必须是该产品文档仓库，业务仓库仅作 reference。普通仓库的 README、docs、说明或验收文件修改使用 maintenance（即使交付物只有 Markdown），无需产品规划记录时不要创建产品 ID 或添加 product_record；未配置产品文档仓库时不能选择 documentation。此分类不改变实际确认的目标、只读范围、START、Review 或发布授权。\n`+
       `用户不需要英文别名。同一描述可能对应多个项目，有多个合理候选时 outcome=needs_input，用中文名称和目录提问，不要猜。\n`+
       `任务：${session.title}\n原始需求：${session.originalRequest||session.summary}\n精确提示：${JSON.stringify(session.projectHints||[])} 产品显式提示：${session.explicitProductId||'无'}\n`+
       `若任务已有实现，以下任务 worktree 只读供分析：${JSON.stringify((session.targets||[]).filter(t=>t.worktree).map(t=>({path:t.relativePath,worktree:t.worktree})))}。方案应保留已有工作；不要将原 checkout 的未提交修改混入。\n`+
