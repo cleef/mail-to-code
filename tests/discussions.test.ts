@@ -31,9 +31,9 @@ test('Model decisions are presented as plan points, without creating human discu
  }finally{store.close();}
 });
 test('Discussion and execution confirmation stay separate; recommendation is first, escaped and never bound as approval',()=>{
- const store=new Store(':memory:');try{const s=task();s.state='WAITING_START';s.planManifest='v1';const safe={...choice,humanReason:'隐私 <script> 不可推断',recommendationReason:'选择 <private> 保护隐私'};
+ const store=new Store(':memory:');try{const s=task();s.state='WAITING_START';s.planManifest='v1';const safe={...choice,options:choice.options!.map(o=>o.id==='private'?{...o,label:o.label+'（推荐）'}:o),humanReason:'隐私 <script> 不可推断',recommendationReason:'选择 <private> 保护隐私'};
  const m=store.notify(s,'plan','',[],{preserveBinding:true,questions:[{text:'确认当前版本实施',kind:'confirm',action:'START',dependsOn:[]},safe]});
- assert.match(m.text,/需要你决定/);assert.match(m.text,/执行确认/);assert.match(m.text,/默认私有（推荐）/);assert.ok(m.text.indexOf('private |')<m.text.indexOf('public |'));assert.match(m.text,/需要你判断的原因/);assert.match(m.text,/推荐理由/);
+ assert.match(m.text,/需要你决定/);assert.match(m.text,/执行确认/);assert.match(m.text,/默认私有（推荐）/);assert.ok(!m.text.includes('（推荐）（推荐）'));assert.ok(m.text.indexOf('private |')<m.text.indexOf('public |'));assert.match(m.text,/需要你判断的原因/);assert.match(m.text,/推荐理由/);
  assert.ok(!m.questions![1].binding);assert.equal(m.questions![0].binding!.noticeId,m.id);assert.match(m.presentation!.html,/&lt;script&gt;/);assert.ok(!m.presentation!.html.includes('<script>'));verifyPresentation(m.presentation!,m.summary,[]);
  }finally{store.close();}
 });

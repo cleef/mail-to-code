@@ -63,7 +63,7 @@ function renderDiscussion(blocks:MailBlock[],q:MailQuestion){
  const options=[...(q.options||[])];
  const recommended=options.find(o=>o.id===q.recommendedOptionId);
  if(recommended)options.splice(0,options.length,recommended,...options.filter(o=>o!==recommended));
- table(blocks,'可选方案',['选项','方案','影响'],options.map(o=>[o.id,o.label+(o===recommended?'（推荐）':''),o.impact]));
+ table(blocks,'可选方案',['选项','方案','影响'],options.map(o=>[o.id,o.label+(o===recommended&&!o.label.endsWith('（推荐）')?'（推荐）':''),o.impact]));
  paragraph(blocks,'推荐理由',q.recommendationReason);
 }
 export function createPresentation(session:Session,m:Outbound,source:string,previous?:MailPresentation):MailPresentation {
