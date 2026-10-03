@@ -57,3 +57,17 @@ If interpretation is unavailable, no mail-command fallback exists. One factual
 failure is stored per failed interpretation job. Check model connectivity before
 retrying; cancellation by email also needs Codex. Stop the service administratively
 if immediate shutdown is required. Never retry an uncertain external effect.
+
+## Operator decisions
+
+Codex selects technical details and reversible experience defaults. Plan points
+are explanatory; only structured human questions require decisions. Choice
+questions explain why the operator must decide and provide two or three options,
+a recommendation and its tradeoffs. Missing facts do not acquire invented answers.
+Execution approvals remain bound to the current version and are shown separately.
+Choosing a recommendation does not authorize development, merge or deployment.
+
+Optional question metadata is additive within v7. Historical questions without
+it remain readable, and existing sent/pending presentation snapshots are never
+regenerated. Privately edited guides are preserved; the shared built-in policy
+also reaches analysis, development and reply interpretation.

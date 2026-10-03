@@ -10,7 +10,7 @@ import { planManifest, type MultiWork } from './multi-work.js';
 import {currentBinding,replyBinding,bindingValid,approvalVersion} from './approval.js';
 import {ensureWorkflow,readWorkflowGuide,stageBinding,stageLabel,advanceCompletedStage,WorkflowProposalSchema} from './workflow.js';
 import {isSemanticDecision,validateDecision} from './reply-interpreter.js';
-import type {SemanticDecision,ExecutionFact,MailQuestion,ReplyContext,ApprovalBinding} from './types.js';
+import type {SemanticDecision,ExecutionFact,MailQuestion,QuestionInput,ReplyContext,ApprovalBinding} from './types.js';
 const fingerprint = (t: RepoExecution) => digest({ profile: t.profile, baseBranch: t.baseBranch, mergeMethod: t.mergeMethod || 'merge', deployment: t.deployment });
 export function manifest(s: Session) { return digest({ ...stageBinding(s), documents: s.documentVersion, order: s.mergeOrder, references:(s.references||[]).map(t=>({identity:t.identity,base:t.baseSha,profile:t.profileVersion})), targets: s.targets!.map(t => ({ identity: t.identity,...(s.workflow&&!s.workflow.legacy?{mode:t.auxiliary?'evidence':'model',evidence:!!t.recordEvidence}:{}), profile: t.profileVersion, base: t.baseSha, head: t.reviewSha, pr: t.prNumber, checks: t.checks, pending: t.pendingChecks, merged: t.mergeSha, deploy: t.deployment })) }); }
 export class MultiController extends Controller {
@@ -217,7 +217,7 @@ export class MultiController extends Controller {
         this.store.recordProgress(s,'guard-rejected',text);
         this.observe(s,[{code:'guard_rejected',text}]);
     }
-    private input(s:Session,text:string,questions:string[]){this.observe(s,[{code:'outcome',text}],{kind:'input',text,questions});}
+    private input(s:Session,text:string,questions:QuestionInput[]){this.observe(s,[{code:'outcome',text}],{kind:'input',text,questions});}
     private announce(s:Session,kind:string,text:string,attachments:import('./types.js').Attachment[]=[]){
         const action=kind==='plan'?'START':kind==='review'?'APPROVE':kind==='merge'&&s.workflow?.proposal?.kind!=='documentation'?'DEPLOY':undefined;
         this.observe(s,[{code:'outcome',text}],{kind,text,attachments,action,version:action?approvalVersion(s,action):undefined});
@@ -299,7 +299,7 @@ export class MultiController extends Controller {
             for(const r of records.filter(r=>r.status==='blocked'))r.factReported=true;this.store.save(fresh);
             const facts:ExecutionFact[]=[...records.filter(r=>r.status==='blocked').map(r=>({code:'item_blocked' as const,itemId:r.id,item:r.item,text:r.reason!})),...notes.map(text=>({code:'guard_rejected' as const,text}))];
             this.store.recordProgress(fresh,'reply-receipt',JSON.stringify(records));
-            if(facts.length){this.observe(fresh,facts,{kind:'reply-reconciliation',text:decision.communication.text,questions:decision.questions.map(q=>q.text),sourceDecision:decision});}
+            if(facts.length){this.observe(fresh,facts,{kind:'reply-reconciliation',text:decision.communication.text,questions:structuredClone(decision.questions),sourceDecision:decision});}
             else this.communicate(fresh,decision,context);
             if(decision.nextStep==='analyze'&&!this.pending(fresh)&&fresh.state!=='CANCELLED'){
                 if(['MERGED','DONE'].includes(fresh.state)&&!advanceCompletedStage(fresh))throw Error('REPLY_NEXT_STAGE_GUARD');
@@ -398,7 +398,7 @@ export class MultiController extends Controller {
         const baselines=new Map<string,string>();
         const prepared=new Map<string,PreparedProject>();
         const docsPath=await realpath(this.config.productDocs).catch(()=>this.config.productDocs);
-        const input=(summary:string,questions:string[])=>{s.state='WAITING_INPUT';s.summary=summary;save();this.input(s,summary,questions);};
+        const input=(summary:string,questions:QuestionInput[])=>{s.state='WAITING_INPUT';s.summary=summary;save();this.input(s,summary,questions);};
         for(let round=0;round<3;round++){
             const result=await this.multiWork.analyze(s,job.feedback,signal,id=>{alive();s.analysisThreadId=id;save();});alive();
             s.analysisCandidates=result.projects.map(p=>({path:p.path,displayName:p.displayName,role:p.role}));save();

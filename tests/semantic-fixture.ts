@@ -1,3 +1,4 @@
+import {asQuestion} from '../src/questions.js';
 // Synthetic model decisions for adapter tests. Production never uses this helper.
 import type {ReplyContext,ReplyDecision,ReplyIntent,SemanticDecision,Session} from '../src/types.js';
 import {currentBinding} from '../src/approval.js';
@@ -12,7 +13,7 @@ export function synthetic(s:Session,c:ReplyContext,d?:ReplyIntent|ReplyDecision)
   if(candidate?.kind==='next-stage'||candidate?.kind==='merge'&&s.workflow?.proposal?.kind==='documentation')return {...wire({items:[],questions:[]}),nextStep:'analyze'};
   if(action&&(candidate?.action||candidate?.kind==='reply-reconciliation'&&!candidate.questions?.length))return wire({items:[],questions:[{text:action==='START'?'确认按当前具体方案实施':action==='APPROVE'?'确认合并当前完整 Review':'确认发布已合并目标',kind:'confirm',action,dependsOn:[]}]},'plan',{kind:'confirmation',text:[candidate?.text,...(c.facts||[]).map(f=>f.text)].filter(Boolean).join('\n')||'确认当前版本'});
   const questions=candidate?.questions||c.facts?.map(f=>f.text)||[];
-  if(['input','reply-reconciliation'].includes(candidate?.kind||'')||c.facts?.some(f=>f.code==='guard_rejected'))return wire({items:[],questions:questions.map(text=>({text,kind:'open',dependsOn:[]}))},'plan',{kind:questions.length?'ask_human':'internal',text:candidate?.text||questions.join('\n')});
+  if(['input','reply-reconciliation'].includes(candidate?.kind||'')||c.facts?.some(f=>f.code==='guard_rejected'))return wire({items:[],questions:questions.map(asQuestion)},'plan',{kind:questions.length?'ask_human':'internal',text:candidate?.text||questions.map(q=>asQuestion(q).text).join('\n')});
   return wire({items:[],questions:[]},'plan',{kind:candidate?.kind==='projects'?'requested_status':'final_result',text:candidate?.text||s.summary});
  }
  if(c.mode==='intake'){
