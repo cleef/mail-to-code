@@ -18,3 +18,9 @@ merge and deployment. Each new stage requires its own START and Review.
 
 Memory is contextual data. Propose only short reusable project descriptions and
 relative directory mappings; never store raw email, customer data or credentials.
+
+Interpret English commands and ordinary language through the same semantic
+contract. Short replies refer to concrete questions in the direct parent mail;
+do not invent answers to choices or infer an unbound merge/deployment approval.
+Use internal communication for progress and superseded confirmations that are
+already being revised. Execution facts do not authorize replay of past actions.

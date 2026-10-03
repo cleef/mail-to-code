@@ -166,7 +166,7 @@ unchanged. Built-in controller status tables and approval boilerplate currently
 include Chinese text; full localization of those fixed templates is not yet
 implemented.
 
-Email a description of the project and requested change. Explicit routing is also supported with `NEW <project>:`. Reply to the latest proposal with `START`, then reply to the latest Review with `APPROVE`. Deployment uses a separate `DEPLOY <project>` confirmation after merge.
+Email a description of the project and requested change. A subject such as `NEW <project>:` can provide project context; Codex interprets it with the request. Reply to the latest proposal with `START`, then reply to the latest Review with `APPROVE`. Deployment uses a separate `DEPLOY <project>` confirmation after merge.
 
 **Email notifications:** messages are sent when you need to answer a question,
 confirm a plan/Review/deployment, handle a blocker, or receive a final result.
@@ -174,9 +174,9 @@ New-task acknowledgements, accepted feedback (including future requests), queued
 work, automatic reanalysis and document-stage merge progress are recorded in the
 private SQLite event log instead. A feedback reply produces one revised proposal
 or Review, without a separate success receipt. An explicit `STATUS` request gets
-one status response. Each new stage still needs a fresh `START`.
+one status response. Each new stage still needs a fresh `START`. Codex explicitly chooses whether a round needs human input or only an internal record; guard refusals never become questions automatically.
 
-`STATUS`, `CANCEL` and `RETRY` are available in the task thread. Uncertain sends, merges or deployments require reconciliation; they are not automatically retried. Old or quoted approvals cannot authorize a new version.
+`STATUS`, `CANCEL` and `RETRY` are available in the task thread. All commands, including exact English commands and short acknowledgements, use the same Codex entry. `RUN` cannot bypass a concrete plan and fresh `START`. Email cancellation waits for interpretation; an operator can stop the service directly when Codex is unavailable. Uncertain sends, merges or deployments require reconciliation; they are not automatically retried. Old or quoted approvals cannot authorize a new version.
 
 See [configuration](docs/configuration.md), [operations and migration](docs/operations.md), and [validation](docs/validation.md).
 

@@ -1,6 +1,7 @@
+import {directive} from './legacy-command-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanReply, directive, parseIncoming, authenticated } from '../src/mail.js';
+import { cleanReply, parseIncoming, authenticated } from '../src/mail.js';
 import { assertProjectChanges } from '../src/git.js';
 import { ResultSchema, codexPolicy, shellEnvironment } from '../src/runner.js';
 import { ConfigSchema } from '../src/config.js';

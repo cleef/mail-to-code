@@ -1,3 +1,4 @@
+import {installSemanticFixture,drainObservations,wire,synthetic} from './semantic-fixture.js';
 import {fakeMail} from './fake-mail.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -37,8 +38,9 @@ async function fixture(){
  // Exercise all real source/config validation, replace only external runtime/GitHub readiness probes.
  const adapters=work.adapters.bind(work);work.adapters=(s,t)=>{const a=adapters(s,t);a.runtime.verify=async()=>{};a.github.verify=async()=>{};return a;};
  const mail=fakeMail(config);
- work.interpretReply=async(s,c)=>({action:'feedback',clear:true,evidence:c.incoming.text,feedback:c.incoming.text,question:''});
+ work.interpretReply=async(s,c)=>synthetic(s,c);
  const controller=new MultiController(config,store,mail,{} as Work,registry,work);
+ installSemanticFixture(work,store);drainObservations(controller,store);
  let count=0;const message=(body:string,reply='',subject='示例笔记小程序：只读方案'):Incoming=>({id:'mail-'+(++count),rfcId:`<${count}@qq.com>`,threadId:'canonical',inReplyTo:reply,subject,text:body,from:config.ownerAddress,trusted:true});
  const current=()=>store.sessions().find(s=>!s.system)!;
  const flush=async()=>{while(store.mails().some(m=>m.status==='pending'))await controller.flush();};
@@ -64,7 +66,7 @@ test('Confirmed auto profiles update when main scripts change; old START and RUN
  }finally{await x.cleanup();}
  const y=await fixture();try{
   await y.publish(true);const p=await y.registry.resolve('mobile-app',{sync:true});y.registry.approve(y.registry.target(p));await y.publish(false);
-  y.controller.handle(y.message('直接开发','','NEW mobile-app RUN: task'));await y.controller.startNext();assert.equal(y.implemented(),0);assert.equal(y.current().state,'WAITING_INPUT');assert.equal(y.store.mails().some(m=>m.kind==='run-plan'),false);const internal=y.store.db.prepare("SELECT data FROM events WHERE event='notification_internal'").all().map(row=>JSON.parse(String(row.data)));assert.ok(internal.some(e=>e.kind==='run-plan'&&/RUN 未实施/.test(e.text)));
+  y.controller.handle(y.message('直接开发','','NEW mobile-app RUN: task'));await y.controller.startNext();assert.equal(y.implemented(),0);assert.equal(y.current().state,'WAITING_INPUT');assert.equal(y.store.mails().some(m=>m.kind==='run-plan'),false);const internal=y.store.db.prepare("SELECT data FROM events WHERE event='notification_internal'").all().map(row=>JSON.parse(String(row.data)));assert.ok(internal.some(e=>e.kind==='ack'));
  }finally{await y.cleanup();}
 });
 test('Profile source keeps external/proposal/legacy values and source-only commit does not change auto version',async()=>{
@@ -95,7 +97,7 @@ test('Existing implementation context survives automatic configuration replan an
  const x=await fixture();try{
   await x.publish(true);await x.plan();const s=x.current(),t=s.targets![0];x.registry.approve(t);
   t.worktree='/retained/worktree';t.thread='retained-development-thread';s.state='WAITING_REVIEW';s.blockedPhase=undefined;x.store.save(s);
-  await x.publish(false);x.controller.handle(x.message('继续修改','',s.subject));await x.controller.startNext();assert.equal(x.current().blockedPhase,'plan');assert.equal(x.implemented(),0);
+  await x.publish(false);x.work.interpretReply=async(s,c)=>wire({items:[{id:'edit',action:'feedback',clear:true,evidence:c.incoming.text,text:c.incoming.text,questionRefs:[],dependsOn:[]}],questions:[]},'plan');x.controller.handle(x.message('继续修改','',s.subject));await x.controller.startNext();assert.equal(x.current().blockedPhase,'plan');assert.equal(x.implemented(),0);
   await x.controller.startNext();assert.equal(x.current().targets![0].worktree,'/retained/worktree');assert.equal(x.current().targets![0].thread,'retained-development-thread');
   await x.publish(true);x.controller.handle(x.message('恢复 H5 配置后重新分析','',s.subject));await x.controller.startNext();assert.equal(x.current().state,'WAITING_START');assert.equal(x.current().targets![0].thread,'retained-development-thread');assert.equal(x.implemented(),0);
  }finally{await x.cleanup();}

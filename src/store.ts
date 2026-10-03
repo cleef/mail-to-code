@@ -4,7 +4,6 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Session, Job, JobKind, Outbound, Attachment, MailQuestion, ApprovalBinding } from './types.js';
-import {advanceDocumentation} from './workflow.js';
 import {createSummary} from './mail-summary.js';
 import {approvalVersion} from './approval.js';
 
@@ -24,7 +23,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,session_id TEXT,data TEXT);
       CREATE INDEX IF NOT EXISTS job_status ON jobs(status); CREATE INDEX IF NOT EXISTS outbound_status ON outbox(status);`);
     const version=this.get('schema_version');
-    if(version&&!['1','2','3','4','5','6'].includes(version)){this.db.close();throw new Error('Unsupported SQLite schema version; migration required');}
+    if(version&&!['1','2','3','4','5','6','7'].includes(version)){this.db.close();throw new Error('Unsupported SQLite schema version; migration required');}
     if(!version)this.set('schema_version', '1');
   }
   migrate(map:(session:Session)=>Session) {
@@ -56,13 +55,13 @@ export class Store {
   recordProgress(session: Session,kind: string,text: string) {
     this.event(session.id,'notification_internal',{kind,text,stageId:session.workflow?.stageId,summary:createSummary(session)});
   }
-  notify(session: Session,kind: string,text: string,attachments: Attachment[]=[],options?:{binding?:ApprovalBinding;questions?:Omit<MailQuestion,'id'>[]}): Outbound {
+  notify(session: Session,kind: string,text: string,attachments: Attachment[]=[],options?:{binding?:ApprovalBinding;preserveBinding?:boolean;questions?:Omit<MailQuestion,'id'>[]}): Outbound {
     const marker=randomUUID();
     const mail: Outbound = {id:`<${marker}@mail-to-code.local>`,deliveryMarker:marker,sessionId:session.id,stageId:session.workflow?.stageId,kind,text,attachments,status:'pending',createdAt:new Date().toISOString(),attempts:0};
     mail.summary=createSummary(session);
     const action=kind==='plan'?'START':kind==='review'?'APPROVE':kind==='merge'&&session.workflow?.proposal?.kind!=='documentation'?'DEPLOY':undefined;
     if(action){mail.approvalBinding={noticeId:mail.id,version:approvalVersion(session,action),action,stageId:session.workflow?.legacy?undefined:session.workflow?.stageId};mail.questions=[{id:mail.id+'/q1',kind:action==='DEPLOY'&&(session.targets?.length||0)>1?'choice':'confirm',text:action==='START'?'确认按本次方案实施':action==='APPROVE'?'确认合并本次 Review 的完整清单':'确认发布已合并版本（多项目请指定目标）',action,binding:mail.approvalBinding,dependsOn:[]}];}
-    if(options){mail.approvalBinding=options.binding;mail.questions=options.questions?.map((q,n)=>({...q,id:mail.id+'/q'+(n+1)}));}
+    if(options){mail.approvalBinding=options.preserveBinding?mail.approvalBinding:options.binding;mail.questions=options.questions?.map((q,n)=>({...q,binding:q.action===mail.approvalBinding?.action?mail.approvalBinding:q.binding,id:mail.id+'/q'+(n+1)}));}
     if(mail.summary){mail.presentation=createPresentation(session,mail,text,this.mails().filter(m=>m.sessionId===session.id&&m.stageId===mail.stageId).at(-1)?.presentation);mail.text=mail.presentation.text;}
     this.saveMail(mail); return mail;
   }
@@ -81,7 +80,14 @@ export class Store {
       for(const job of this.jobs().filter(j=>j.status==='running')) {
         if(job.kind==='interpret'){job.status='queued';this.saveJob(job);continue;}
         const staged=this.session(job.sessionId)!;
-        if(job.kind==='merge'&&staged.state==='MERGED'&&advanceDocumentation(staged)){this.save(staged);job.status='done';this.saveJob(job);this.enqueue(staged,'plan','文档阶段已合并；只读判断下一步，不沿用旧 START。');this.event(staged.id,'stage_recovered');continue;}
+        if(job.kind==='merge'&&staged.state==='MERGED'&&!staged.mergeUncertain&&!staged.partialMerge&&!!staged.targets?.length&&staged.targets.every(t=>t.mergeSha)){
+          job.status='done';this.saveJob(job);
+          if(!this.jobs().some(j=>j.sessionId===staged.id&&j.stageId===job.stageId&&j.kind==='interpret'&&j.reply?.mode==='outcome'&&['queued','running','done'].includes(j.status)&&j.reply?.candidate?.kind==='merge')){
+            const observation=this.enqueue(staged,'interpret','理解已知合并结果');
+            observation.reply={mode:'outcome',facts:[{code:'outcome',text:'服务重启前完整阶段已知合并成功；由 Codex 决定后续规划与沟通。'}],candidate:{kind:'merge',text:staged.summary,...(staged.workflow?.proposal?.kind!=='documentation'?{action:'DEPLOY' as const,version:approvalVersion(staged,'DEPLOY')}:{})},epoch:staged.cancellationEpoch,stageId:staged.workflow?.stageId,incoming:{id:observation.id,rfcId:'',inReplyTo:'',threadId:staged.initialThreadId,subject:staged.subject,text:'',from:'',trusted:true}};this.saveJob(observation);
+          }
+          this.event(staged.id,'stage_recovered');continue;
+        }
         job.status='failed'; this.saveJob(job); const session=this.session(job.sessionId)!;
         this.run(job.id,session.id,{...this.read<Record<string,unknown>>('runs',job.id),status:'interrupted',finishedAt:new Date().toISOString()});
         if(session.state==='CANCELLED') continue;

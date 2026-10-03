@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
-import { Controller, type Work } from '../src/controller.js';
+import { Controller, type Work } from './legacy-controller-fixture.js';
 import { ConfigSchema } from '../src/config.js';
 import { git } from '../src/git.js';
 import type { Incoming, Session } from '../src/types.js';

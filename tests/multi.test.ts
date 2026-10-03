@@ -1,3 +1,4 @@
+import {installSemanticFixture,drainObservations,wire,synthetic} from './semantic-fixture.js';
 import {fakeMail} from './fake-mail.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -42,6 +43,7 @@ async function fixture(legacy = false) {
     const mail=fakeMail(config,()=>{sends++;});
     Object.assign(work,{interpretReply:async(s:Session,c:any)=>({action:'feedback',clear:true,evidence:c.incoming.text,feedback:c.incoming.text,question:''})});
     const controller = new MultiController(config, store, mail, {} as Work, registry, work as unknown as MultiWork);
+    installSemanticFixture(work,store);drainObservations(controller,store);
     let n = 0;
     const message = (text: string, reply = '', subject?: string) => ({ id: 'm' + (++n), rfcId: `<m${n}@qq.com>`, threadId: 'initial', inReplyTo: reply, subject: subject || 'Re: ' + store.sessions().filter(s => !s.system)[0]?.subject, text, from: config.ownerAddress, trusted: true } as Incoming);
     const s = () => store.sessions().filter(s => !s.system)[0];
@@ -69,7 +71,7 @@ finally {
 } });
 test('First RUN cannot skip onboarding; configuration change requires a fresh START', async () => { const x = await fixture(); try {
     x.controller.handle(x.message('task', '', 'NEW one RUN: first'));
-    assert.equal(x.store.jobs()[0].kind, 'plan');
+    assert.equal(x.store.jobs()[0].kind, 'interpret');
     await x.controller.startNext();
     await x.flush();
     const old = x.s().planNotice!;
@@ -134,7 +136,7 @@ test('Partial merge stops, records progress and requires a new approval rather t
     await x.controller.startNext();
     assert.deepEqual(x.merged, ['one']);
     assert.equal(x.s().targets![0].mergeSha, 'merged-one');
-    assert.equal(x.s().reviewNotice, undefined);
+    assert.notEqual(x.s().reviewNotice, old);
     await x.controller.startNext();
     await x.flush();
     assert.equal(x.s().state, 'WAITING_REVIEW');
@@ -155,11 +157,13 @@ test('mail-to-code identity forces whole batch manual; manifest/head changes inv
     task.targets![1].manualMerge = true;
     x.store.save(task);
     x.controller.handle(x.message('APPROVE', task.reviewNotice));
+    await x.controller.startNext();
     assert.equal(x.store.jobs().some(j => j.status === 'queued'), false);
     task.targets![1].manualMerge = false;
     task.targets![0].reviewSha = 'changed';
     x.store.save(task);
     x.controller.handle(x.message('APPROVE', task.reviewNotice));
+    await x.controller.startNext();
     assert.equal(x.store.jobs().some(j => j.status === 'queued'), false);
     assert.notEqual(task.reviewManifest, manifest(task));
 }
@@ -188,6 +192,7 @@ test('Failed checks cannot enter Review; feedback stays queued and cancellation 
         y.controller.handle(y.message('意见'));
         assert.equal(y.store.jobs().filter(j => j.status === 'queued').length, 1);
         y.controller.handle(y.message('CANCEL'));
+        await y.controller.startNext();
         finish({ outcome: 'plan_ready', summary: 'done', questions: [], requiresBackend: false, screenshotTargets: [] });
         await pending;
         assert.equal(y.s().state, 'CANCELLED');
@@ -211,7 +216,7 @@ test('Migration is transactional, preserves v1 cursor/outbox/SHA/thread and snap
     assert.equal(x.store.get('schema_version'), '1');
     await assert.rejects(migrate(x.config, x.store, x.registry, async () => true), /Stop/);
     const result = await migrate(x.config, x.store, x.registry, async () => false);
-    assert.equal(result.version, 6);
+    assert.equal(result.version, 7);
     assert.equal(x.store.get('gmail_history'), 'saved-cursor');
     assert.equal(x.store.mail(out.id)!.text, 'saved-mail');
     const t = x.store.session(old.id)!.targets![0];
@@ -241,7 +246,7 @@ test('PROJECTS and unknown aliases produce a reply without code execution; arbit
     await x.controller.startNext();
     assert.match(x.store.mails()[0].text, /one/);
     x.controller.handle({ ...x.message('', '', 'NEW missing: task'), threadId: 'new-unknown' });
-    assert.equal(x.store.jobs().filter(j=>j.status==='queued')[0].kind,'plan');
+    assert.equal(x.store.jobs().filter(j=>j.status==='queued')[0].kind,'interpret');
     await x.repo('product-records');
     for (const folder of ['ideas', 'prd', 'design', 'decisions'])
         await mkdir(join(x.config.productDocs, folder));
@@ -265,6 +270,7 @@ test('Cancellation during merge preserves the external SHA without moving the ta
     const pending = x.controller.startNext()!;
     await started;
     x.controller.handle(x.message('CANCEL'));
+    await x.controller.startNext();
     resolve('external-known-sha');
     await pending;
     assert.equal(x.s().state, 'CANCELLED');
@@ -289,6 +295,7 @@ test('Interrupted merge retains per-repository progress and fences RETRY until e
     assert.equal(x.s().state, 'FAILED');
     assert.equal(x.s().targets![0].mergeSha, 'merged-one');
     x.controller.handle(x.message('RETRY'));
+    await x.controller.startNext();
     assert.equal(x.store.jobs().some(j => j.status === 'queued'), false);
 }
 finally {
@@ -341,7 +348,7 @@ test('Ambiguous natural description requests Chinese clarification and cannot ST
     }});
     x.controller.handle(x.message('分享','','示例笔记：添加分享'));await x.controller.startNext();await x.flush();
     assert.equal(x.s().state,'WAITING_INPUT');assert.match(x.store.mails().at(-1)!.text,/示例笔记网页/);
-    x.controller.handle(x.message('START'));assert.equal(x.store.jobs().some(j=>j.status==='queued'),false);
+    x.controller.handle(x.message('START'));await x.controller.startNext();assert.equal(x.store.jobs().some(j=>j.status==='queued'),false);
     x.controller.handle(x.message('是示例笔记小程序'));await x.controller.startNext();
     assert.equal(x.s().state,'WAITING_START');assert.equal(x.s().targets![0].projectId,'two');
     assert.equal(x.s().analysisThreadId,'same-analysis');
@@ -351,7 +358,8 @@ test('Unknown reply headers/task IDs cannot create a natural task; catalog scans
   const x=await fixture();try{
     let scans=0;const original=x.registry.scan.bind(x.registry);x.registry.scan=async(force?:boolean)=>{scans++;await original(force);};
     for(const m of [x.message('需求','<lost@mail>','自然主题'),x.message('意见','','Re: 旧任务'),x.message('意见','','[DEV-20261001-999] 旧任务'),x.message('APPROVE','','')])x.controller.handle(m);
-    assert.equal(x.store.sessions().some(s=>!s.system),false);assert.equal(scans,0);
+    assert.equal(x.store.jobs().some(j=>j.kind!=='interpret'),false);assert.equal(scans,0);
+    Object.defineProperty(x.work,'interpretReply',{value:async(_s:Session,c:any)=>c.mode==='outcome'?synthetic(_s,c):c.incoming.subject==='PROJECTS'?wire({items:[{id:'catalog',action:'catalog',clear:true,evidence:'PROJECTS',text:'列出项目',questionRefs:[],dependsOn:[]}],questions:[]}):wire({items:[],questions:[{text:'请指出正确任务',kind:'open',dependsOn:[]}]})});
     x.controller.handle({...x.message('','','PROJECTS'),threadId:'catalog'});await x.controller.startNext();
     assert.equal(scans,1);assert.match(x.store.mails().at(-1)!.text,/one/);
   }finally{await x.cleanup();}
@@ -387,7 +395,7 @@ test('v2 migration keeps running development threads and refreshes only pending 
   const x=await fixture();try{
     await x.review();const old=x.s(),running={...old,id:'DEV-20261001-888',state:'RUNNING' as const,thread:'legacy-thread'};
     x.store.save(running);const start={...old,id:'DEV-20261001-889',state:'WAITING_START' as const,planNotice:'old-plan'};x.store.save(start);
-    const result=await migrate(x.config,x.store,x.registry,async()=>false);assert.equal(result.version,6);assert.equal(x.store.get('schema_version'),'6');
+    const result=await migrate(x.config,x.store,x.registry,async()=>false);assert.equal(result.version,7);assert.equal(x.store.get('schema_version'),'7');
     assert.equal(x.store.session(running.id)!.thread,'legacy-thread');assert.equal(x.store.session(running.id)!.targets![0].thread,'thread-one');
     assert.equal(x.store.session(start.id)!.planNotice,undefined);assert.equal(x.store.session(old.id)!.reviewNotice,undefined);
     assert.equal(x.store.mail(old.reviewNotice!)!.text.includes('Review'),true);
@@ -414,7 +422,7 @@ test('Inferred product IDs include independently validated product evidence last
     assert.equal(x.s().targets!.at(-1)!.auxiliary,true);assert.equal(x.s().mergeOrder!.at(-1),'product-records');
   }finally{await x.cleanup();}
   const y=await fixture();try{
-    Object.assign(y.work,{analyze:async()=>({workflow:{decision:'propose_step',kind:'implementation',name:'实施',rationale:'已确认需求',deliverables:['实现'],acceptance:['测试']},outcome:'plan_ready',summary:'冲突',questions:[],productId:'OTHER-0007',projects:[],mergeOrder:[]})});
+    Object.assign(y.work,{analyze:async()=>({workflow:{decision:'propose_step',kind:'implementation',name:'实施',rationale:'已确认需求',deliverables:['实现'],acceptance:['测试']},outcome:'needs_input',summary:'请确认产品',questions:['邮件产品与所讨论文档不同，请确认产品'],productId:'OTHER-0007',projects:[],mergeOrder:[]})});
     y.controller.handle(y.message('PRODUCT: DEMO-0003','','示例笔记小程序'));await y.controller.startNext();
     assert.equal(y.s().state,'WAITING_INPUT');assert.deepEqual(y.s().targets,[]);assert.match(y.store.mails().at(-1)!.text,/请确认产品/);
   }finally{await y.cleanup();}
@@ -426,14 +434,14 @@ test('START baseline failure automatically replans without source execution and 
     x.controller.handle(x.message('START',old));await x.controller.startNext();assert.equal(x.s().targets![0].worktree,undefined);
     assert.equal(x.store.jobs().filter(j=>j.status==='queued')[0].kind,'plan');await x.controller.startNext();await x.flush();
     assert.equal(x.s().state,'WAITING_START');assert.notEqual(x.s().planNotice,old);
-    x.controller.handle(x.message('START',old));assert.equal(x.store.jobs().some(j=>j.status==='queued'),false);
+    x.controller.handle(x.message('START',old));await x.controller.startNext();assert.equal(x.store.jobs().some(j=>j.status==='queued'),false);
   }finally{await x.cleanup();}
 });
-test('Confirmed exact RUN remains compatible without a root planning call',async()=>{
+test('RUN cannot bypass semantic planning or the new-stage START',async()=>{
   const x=await fixture();try{
     const t=x.registry.target('one');x.registry.approve(t);
     x.controller.handle(x.message('实施','','NEW one RUN: task'));await x.controller.startNext();
-    assert.equal(x.s().state,'WAITING_REVIEW');assert.equal(x.s().analysisThreadId,undefined);assert.deepEqual(x.phases,['develop']);
+    assert.equal(x.s().state,'WAITING_START');assert.equal(x.s().analysisThreadId,'analysis-thread');assert.deepEqual(x.phases,['plan','plan']);
   }finally{await x.cleanup();}
 });
 
@@ -463,7 +471,7 @@ test('Multi-project intake is silent until its actionable plan or requested stat
  const x=await fixture();try{
   x.controller.handle(x.message('PROJECTS: one','','NEW one: synthetic task'));assert.equal(x.store.mails().length,0);await x.flush();
   const events=x.store.db.prepare("SELECT data FROM events WHERE event='notification_internal'").all().map(row=>JSON.parse(String(row.data)));assert.equal(events[0].kind,'ack');
-  x.controller.handle(x.message('STATUS'));await x.flush();assert.deepEqual(x.store.mails().map(m=>m.kind),['status']);
+  const resume=(x.controller as any).startBusiness.bind(x.controller);(x.controller as any).startBusiness=()=>undefined;x.controller.handle(x.message('STATUS'));await x.controller.startNext();await x.flush();(x.controller as any).startBusiness=resume;assert.deepEqual(x.store.mails().map(m=>m.kind),['status']);
   await x.controller.startNext();assert.equal(x.s().state,'WAITING_START');assert.deepEqual(x.store.mails().map(m=>m.kind),['status','plan']);assert.equal(x.store.mail(x.s().planNotice!)!.approvalBinding!.action,'START');
  }finally{await x.cleanup();}
 });
