@@ -1,0 +1,12 @@
+node_modules
+dist/
+*.sqlite*
+.env*
+config.json
+oauth-client.json
+token.json
+*.log
+!.env.example
+
+.playwright-cli/
+output/playwright/

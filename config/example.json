@@ -1,0 +1,11 @@
+{
+  "gmailAddress": "agent@gmail.com",
+  "ownerAddress": "owner@example.com",
+  "dataDir": "~/.local/share/mail-to-code",
+  "codexCommand": "codex",
+  "pollSeconds": 60,
+  "githubTokenFile": "~/.config/mail-to-code/github-token",
+  "projectsRoot": "~/projects",
+  "repositories": {},
+  "profiles": {}
+}

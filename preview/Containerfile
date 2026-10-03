@@ -1,0 +1,9 @@
+FROM mcr.microsoft.com/playwright:v1.63.0-noble
+WORKDIR /opt/preview
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+COPY capture.mjs server.mjs ./
+ENV HOME=/tmp
+# Host checkout may be created under umask 077; keep-id users must read image code.
+RUN chmod -R a+rX /opt/preview
+CMD ["node", "/opt/preview/capture.mjs"]

@@ -1,0 +1,33 @@
+{
+  "name": "mail-to-code",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13 <23"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test dist/tests/*.test.js preview/server.test.mjs",
+    "start": "node dist/src/cli.js serve",
+    "doctor": "node dist/src/cli.js doctor",
+    "auth": "node dist/src/cli.js auth",
+    "mcp": "node dist/src/mcp.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.26.0",
+    "google-auth-library": "10.5.0",
+    "html-to-text": "9.0.5",
+    "mailparser": "3.9.32",
+    "nodemailer": "10.0.13",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/html-to-text": "9.0.4",
+    "@types/mailparser": "3.4.6",
+    "@types/node": "22.19.15",
+    "@types/nodemailer": "7.0.11",
+    "typescript": "5.9.3"
+  },
+  "license": "MIT"
+}
