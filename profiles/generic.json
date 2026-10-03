@@ -1,0 +1,10 @@
+{
+  "kind": "generic",
+  "runtime": ["node"],
+  "install": [{"executable": "npm", "args": ["ci", "--no-audit", "--no-fund"], "cwd": "."}],
+  "build": [{"executable": "npm", "args": ["run", "build"], "cwd": "."}],
+  "checks": [{"executable": "npm", "args": ["test"], "cwd": "."}],
+  "packageSources": ["registry.npmjs.org"],
+  "preview": {"kind": "none"},
+  "pendingChecks": []
+}
