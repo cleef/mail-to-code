@@ -24,3 +24,13 @@ contract. Short replies refer to concrete questions in the direct parent mail;
 do not invent answers to choices or infer an unbound merge/deployment approval.
 Use internal communication for progress and superseded confirmations that are
 already being revised. Execution facts do not authorize replay of past actions.
+
+<!-- project-workflow:controller:v1:begin -->
+## Shared branch closeout convention
+
+- Read repository-specific rules and use one feature branch per reviewed PR by default. After merge, use a fresh branch from the latest default branch for follow-up work, keeping any existing product ID. Ordinary maintenance need not create a product ID.
+- Report pending closeout separately from release acceptance. A merged PR does not mean the product is deployed or Done. Preserve PR, commit and verification evidence.
+- The controller/operator owns Git and external effects. The model must not remove branches/worktrees or change GitHub settings. Each stage still needs its own START and Review; deployment remains separately approved.
+- Operator closeout requires a merged PR with recorded head SHA matching the local HEAD, no unsaved tracked/untracked work, and checks of ignored/release files, active sessions, locks, dependencies and protection. Preserve primary checkouts, post-merge commits and anything still in use. Squash/rebase merges require PR/head evidence, not only git branch --merged.
+- New repositories require shared rule onboarding and GitHub auto-delete configuration before development. Missing origin, permissions or configuration remains pending. Existing edited guides are preserved; no periodic discovery or automatic cleanup is introduced.
+<!-- project-workflow:controller:v1:end -->
