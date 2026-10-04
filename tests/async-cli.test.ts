@@ -367,7 +367,9 @@ test('failed build preserves the approved scope and successful checks return ver
     f.store.put('project', c.id + ':' + path, { id: c.id + '-web', repo: 'web', worktree: path, baseSha: await git(path, ['rev-parse', 'HEAD']) });
     const original = Runner.prototype.check;
     let failing = true;
-    Runner.prototype.check = async () => {
+    Runner.prototype.check = async (_tree, _command, _args, _cwd, _signal, _network, options) => {
+        assert.ok(options?.policy?.join('\n').includes('async-cli.sqlite'));
+        assert.ok(options?.policy?.join('\n').includes('auth.json'));
         if (failing)
             throw Object.assign(Error('PROCESS_FAILED:node:2'), { stdout: 'TS2339', stderr: '' });
         return { stdout: 'passed', stderr: '' };

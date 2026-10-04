@@ -12,6 +12,7 @@ import { Runner } from './runner.js';
 import { RuntimeAdapter, markdownChecks } from './runtime.js';
 import { proposeProfile } from './projects.js';
 import { projectLocations } from './async-projects.js';
+import { asyncPolicy } from './async-policy.js';
 export interface ScopeProject {
     path: string;
     role: 'modify' | 'reference' | 'product_record';
@@ -242,7 +243,7 @@ export class AsyncTools {
             const configured = this.config.profiles[s.repo], sources = configured?.packageSources;
             const checkId = this.conversation.id + ':' + hash({ project: s.repo, executable: a.executable, args: a.args, cwd: a.cwd });
             try {
-                const before = await this.sourceDigest(s), result = await new Runner(this.config).check(s.worktree!, a.executable, a.args, cwd, this.signal, a.network, { sources }), after = await this.sourceDigest(s);
+                const before = await this.sourceDigest(s), result = await new Runner(this.config).check(s.worktree!, a.executable, a.args, cwd, this.signal, a.network, { sources, policy: asyncPolicy(this.config, this.conversation) }), after = await this.sourceDigest(s);
                 this.store.put('check', checkId, { id: checkId, project: s.repo, digest: after, executable: a.executable, args: a.args, cwd: a.cwd, ok: before === after });
                 return { ok: true, checkId: before === after ? checkId : undefined, ...result };
             }

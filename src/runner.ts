@@ -200,8 +200,8 @@ export class Runner {
       child.stdin.end(input);
     });
   }
-  async check(worktree:string,command:string,args:string[],cwd:string,signal:AbortSignal,network=false,options:{env?:NodeJS.ProcessEnv;sources?:string[]}={}) {
-    const policy=codexPolicy(this.config,worktree,'develop');
+  async check(worktree:string,command:string,args:string[],cwd:string,signal:AbortSignal,network=false,options:{env?:NodeJS.ProcessEnv;sources?:string[];policy?:string[]}={}) {
+    const policy=[...(options.policy||codexPolicy(this.config,worktree,'develop'))];
     if(network){policy.push('-c','permissions.mail-to-code-task.network.enabled=true','-c','features.network_proxy=true','-c',`permissions.mail-to-code-task.network.domains={${(options.sources||['registry.npmjs.org']).map(d=>JSON.stringify(d)+'="allow"').join(',')}}`);}
     // Codex 0.159's Linux stdio bridge appears as UNKNOWN to Node's handle
     // detection. Ordinary pipes restore Node/npm logs while pipefail preserves
