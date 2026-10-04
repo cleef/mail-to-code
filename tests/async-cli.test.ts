@@ -262,12 +262,16 @@ test('runtime scheduler caps active primary conversations and an inspection exce
     f.store.close();
 });
 test('sandbox is projects-root read-only with only feature worktrees/notes writable and secret masks', async () => {
-    const f = await fixture(), c = f.store.intake(incoming('one'), 'raw', 'body'), policy = asyncPolicy(f.config, c).join('\n');
+    const f = await fixture(), c = f.store.intake(incoming('one'), 'raw', 'body');
+    await writeFile(join(f.config.dataDir, 'state.sqlite'), 'synthetic legacy state');
+    const policy = asyncPolicy(f.config, c).join('\n');
+    assert.ok(policy.includes(JSON.stringify(join(f.config.dataDir, 'state.sqlite')) + '="deny"'));
     assert.ok(policy.includes(JSON.stringify(f.config.projectsRoot) + '="read"'));
     assert.ok(policy.includes('**/.env'));
     assert.ok(policy.includes('network.enabled=false'));
     assert.ok(policy.includes('features.plugins=false'));
-    assert.ok(policy.includes('auth.json'));
+    assert.ok(policy.includes('**/.env'));
+    assert.ok(!policy.includes(JSON.stringify(join(f.config.dataDir, 'state.sqlite-wal'))));
     assert.ok(!policy.includes(JSON.stringify(join(f.config.projectsRoot, '.agents')) + '="read"'));
     assert.ok(!policy.includes(JSON.stringify(join(f.config.projectsRoot, '.git')) + '="read"'));
     f.store.close();
@@ -371,7 +375,7 @@ test('failed build preserves the approved scope and successful checks return ver
     let failing = true;
     Runner.prototype.check = async (_tree, _command, _args, _cwd, _signal, _network, options) => {
         assert.ok(options?.policy?.join('\n').includes('async-cli.sqlite'));
-        assert.ok(options?.policy?.join('\n').includes('auth.json'));
+        assert.ok(options?.policy?.join('\n').includes('**/.env'));
         if (failing)
             throw Object.assign(Error('PROCESS_FAILED:node:2'), { stdout: 'TS2339', stderr: '' });
         return { stdout: 'passed', stderr: '' };

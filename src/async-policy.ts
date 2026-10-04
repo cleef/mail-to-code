@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { readdirSync } from 'node:fs';
+import { readdirSync, existsSync } from 'node:fs';
 import { expand, type Config } from './config.js';
 import type { Conversation } from './async-store.js';
 import { codexPolicy } from './runner.js';
@@ -27,6 +27,13 @@ export function asyncPolicy(config: Config, c: Conversation) {
         if ((e as NodeJS.ErrnoException).code !== 'ENOENT')
             throw e;
     }
+    // Missing exact masks have no source to hide and race in Linux's synthetic
+    // mount helper. System/home paths remain denied by the parent policy; new
+    // engine databases are created before any model starts. Keep future-file
+    // glob restrictions inside the writable task roots.
+    for (const [path, permission] of Object.entries(entries))
+        if (permission === 'deny' && !path.includes('*') && !existsSync(path))
+            delete entries[path];
     base[fsIndex] = value + ',' + Object.entries(entries).map(([k, v]) => JSON.stringify(k) + '=' + JSON.stringify(v)).join(',') + '}';
     // No account MCP servers, plugins or hooks are inherited. Network is disabled for native tools.
     return base;
