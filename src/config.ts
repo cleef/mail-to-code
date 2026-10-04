@@ -12,6 +12,7 @@ const repository = z.object({
   deployment: z.object({ host: z.string().regex(/^[\w.@-]+$/), domain: z.string().regex(/^[\w.-]+$/), remoteBase: z.string().regex(/^\/[\w./-]+$/), script:z.string().regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[\w./-]+$/).default('scripts/deploy.sh'), adapter:z.literal('script').default('script'), args:z.array(z.string()).default([]), healthPaths:z.array(z.string().regex(/^\/(?!\/)/)).default(['/']), enabled: z.boolean().default(false) }).strict().optional()
 }).strict();
 export const ConfigSchema = z.object({
+  engine:z.enum(['legacy','async-cli']).default('legacy'),
   gmailAddress: z.string().email(), ownerAddress: z.string().email(),
   dataDir: z.string().default('~/.local/share/mail-to-code'), codexCommand: z.string().default('codex'),
   pollSeconds: z.number().int().min(10).default(60), timeoutSeconds: z.number().int().min(30).default(3600),

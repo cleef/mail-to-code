@@ -1,0 +1,23 @@
+// Actual Codex sandbox only; no model, mailbox, network or business operations.
+import assert from 'node:assert/strict';
+import {mkdtemp,mkdir,writeFile,realpath,readFile,symlink} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {ConfigSchema} from '../dist/src/config.js';
+import {asyncPolicy,ASYNC_CODEX_VERSION} from '../dist/src/async-cli.js';
+import {execute} from '../dist/src/process.js';
+import {shellEnvironment,Runner} from '../dist/src/runner.js';
+const command=process.env.ASYNC_CODEX_COMMAND||'codex';
+assert.equal((await execute(command,['--version'])).stdout.trim(),`codex-cli ${ASYNC_CODEX_VERSION}`);
+const root=await realpath(await mkdtemp(join(tmpdir(),'mail-async-sandbox-'))),projectsRoot=join(root,'projects'),dataDir=join(root,'state'),c={id:'primary'},directory=join(dataDir,'async-cli/features',c.id),worktree=join(directory,'worktrees','demo'),notes=join(directory,'notes'),foreign=join(dataDir,'async-cli/features','foreign');
+await Promise.all([mkdir(projectsRoot,{recursive:true}),mkdir(worktree,{recursive:true}),mkdir(notes,{recursive:true}),mkdir(join(directory,'input'),{recursive:true}),mkdir(foreign,{recursive:true})]);
+const linked=join(root,'linked-repository');await mkdir(linked);await mkdir(join(linked,'.git'));await writeFile(join(linked,'README.md'),'linked source');await symlink(linked,join(projectsRoot,'linked'));
+const source=join(projectsRoot,'source.txt'),db=join(dataDir,'async-cli.sqlite'),secret=join(worktree,'.env'),git=join(worktree,'.git'),token=join(root,'bridge-token');
+await Promise.all([writeFile(source,'original'),writeFile(db,'synthetic runtime only'),writeFile(secret,'SYNTHETIC_SECRET=example'),writeFile(git,'synthetic git metadata'),writeFile(token,'synthetic token'),writeFile(join(foreign,'FEATURE.md'),'foreign private state')]);
+const config=ConfigSchema.parse({gmailAddress:'agent@example.test',ownerAddress:'owner@example.test',projectsRoot,dataDir,codexCommand:command,githubTokenFile:token});
+const probe=`const fs=require('node:fs');const paths=JSON.parse(process.argv[1]);let results={linkedProjectRead:fs.readFileSync(paths.linked,'utf8')==='linked source'};for(const [key,path]of Object.entries(paths.readDeny)){try{fs.readFileSync(path);results[key]=false;}catch{results[key]=true;}}for(const [key,path]of Object.entries(paths.writeDeny)){try{fs.writeFileSync(path,'changed');results[key]=false;}catch{results[key]=true;}}fs.writeFileSync(paths.allowed,'allowed');process.stdout.write(JSON.stringify(results));`;
+const input={readDeny:{database:db,secret,token,foreign:join(foreign,'FEATURE.md'),gitMetadata:git},writeDeny:{originalCheckout:source,linkedCheckout:join(projectsRoot,'linked/README.md'),gitMetadataWrite:git},allowed:join(notes,'probe.txt'),linked:join(projectsRoot,'linked/README.md')};
+const result=await execute(command,['sandbox',...asyncPolicy(config,c),'-P','mail-to-code-task','--','/usr/bin/bash','-c','set -o pipefail; "$@" 2> >(cat >&2) | cat','sandbox-probe',process.execPath,'-e',probe,JSON.stringify(input)],{cwd:projectsRoot,env:shellEnvironment(),timeoutMs:30000});
+const checks=JSON.parse(result.stdout);for(const [name,passed]of Object.entries(checks))assert.equal(passed,true,name+' unexpectedly permitted');assert.equal(await readFile(source,'utf8'),'original');assert.equal(await readFile(input.allowed,'utf8'),'allowed');
+const adapted=await new Runner(config).check(worktree,process.execPath,['-e',probe,JSON.stringify(input)],worktree,new AbortController().signal,false,{policy:asyncPolicy(config,c)});assert.deepEqual(JSON.parse(adapted.stdout),checks);
+console.log(JSON.stringify({codexVersion:ASYNC_CODEX_VERSION,checks,adapterChecks:true,network:false,realMailSent:0,businessEffects:0},null,2));

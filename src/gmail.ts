@@ -7,6 +7,7 @@ import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { configDir, privateDir, privateFile, type Config } from './config.js';
 import {summaryHtml,summaryText} from './mail-summary.js';
 import type { MailSummary, MailPresentation, Attachment } from './types.js';
+import { markdownHtml } from './mail-markdown.js';
 
 export const SCOPES=['https://www.googleapis.com/auth/gmail.readonly','https://www.googleapis.com/auth/gmail.send'];
 export class GmailError extends Error { constructor(public status:number, message:string) { super(message); } }
@@ -51,7 +52,7 @@ export class GmailClient {
       for(const h of data.history||[])for(const m of h.messagesAdded||[])messages.push(m.message); latest=data.historyId; page=data.nextPageToken;
     }while(page);return {messages:[...new Map(messages.map(m=>[m.id,m])).values()],cursor:latest};
   }
-  async send(input:{to:string;subject:string;text:string;summary?:MailSummary;presentation?:MailPresentation;messageId?:string;deliveryMarker?:string;threadId?:string;inReplyTo?:string;references?:string[];attachments?:Attachment[]}) {
+  async send(input:{to:string;subject:string;text:string;markdown?:boolean;summary?:MailSummary;presentation?:MailPresentation;messageId?:string;deliveryMarker?:string;threadId?:string;inReplyTo?:string;references?:string[];attachments?:Attachment[]}) {
     if(input.to.toLowerCase()!==this.config.ownerAddress) throw new Error('Recipient is not the configured owner');
     if(/[\r\n]/.test(input.subject))throw new Error('Invalid subject');
     const attachments=input.attachments||[]; let total=0;
@@ -63,7 +64,7 @@ export class GmailClient {
     if(input.presentation){verifyPresentation(input.presentation,input.summary,attachments);if(input.text!==input.presentation.text)throw Error('MAIL_TEXT_SNAPSHOT_MISMATCH');}
     const raw=await new MailComposer({from:this.config.gmailAddress,to:this.config.ownerAddress,subject:input.subject,
       headers:input.deliveryMarker?{'X-Mail-To-Code-Delivery':input.deliveryMarker}:undefined,
-      text,html:input.presentation?input.presentation.html+(input.deliveryMarker?`<p>[MAIL-REF: ${escape(input.deliveryMarker)}]</p>`:''):(input.summary?summaryHtml(input.summary):'')+`<div style="white-space:pre-wrap">${escape(input.summary&&text.startsWith(summaryText(input.summary))?text.slice(summaryText(input.summary).length):text)}</div>`+attachments.filter(a=>a.cid).map(a=>`<p>${escape(a.filename)}</p><img style="max-width:100%" src="cid:${escape(a.cid!)}">`).join(''),
+      text,html:input.markdown?markdownHtml(text):input.presentation?input.presentation.html+(input.deliveryMarker?`<p>[MAIL-REF: ${escape(input.deliveryMarker)}]</p>`:''):(input.summary?summaryHtml(input.summary):'')+`<div style="white-space:pre-wrap">${escape(input.summary&&text.startsWith(summaryText(input.summary))?text.slice(summaryText(input.summary).length):text)}</div>`+attachments.filter(a=>a.cid).map(a=>`<p>${escape(a.filename)}</p><img style="max-width:100%" src="cid:${escape(a.cid!)}">`).join(''),
       messageId:input.messageId||`<${randomUUID()}@mail-to-code.local>`,inReplyTo:input.inReplyTo,references:input.references,attachments}).compile().build();
     return this.request<MessageRef>('messages/send','POST',{raw:raw.toString('base64url'),...(input.threadId?{threadId:input.threadId}:{})});
   }

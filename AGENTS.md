@@ -4,12 +4,14 @@ Use Node 22.13+ (22.x), npm, TypeScript and native SQLite. Run npm test before h
 Keep all tests and documentation synthetic: never include operator projects,
 private email, credentials, deployment addresses or runtime state in this repo.
 
-The controller owns Gmail, Git, PRs, merge and deployment. Analysis is read-only;
-the model edits only the confirmed worktree. Preserve immutable notice, stage,
-manifest and commit bindings. Never retry uncertain external effects automatically.
+The bridge owns Gmail, privileged Git, PRs, merge and deployment. Async email goes
+directly to a persistent Codex session; the bridge does not advance business stages.
+Source edits stay in approved worktrees. Preserve immutable mail and exact operation
+bindings. Never retry uncertain effects. Stage rules remain in the legacy engine.
 
 Configuration and runtime memory belong outside the checkout. Preserve edited
-private guides across installs and upgrades. Every new stage needs a fresh START.
+private guides across installs and upgrades. Async scope persists through technical
+changes and repository handoffs; merge and deployment need separate confirmation.
 Changes to this controller must be reviewed and upgraded manually.
 
 <!-- project-workflow:repo:v1:begin -->

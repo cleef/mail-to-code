@@ -12,7 +12,7 @@ export function assertProjectChanges(paths:string[]) {
 }
 export class GitAdapter {
   constructor(readonly config:Config,readonly runner:Runner,readonly scope:'project'='project') {}
-  async prepare(session:Session,signal?:AbortSignal) {
+  async prepare(session:Session,signal?:AbortSignal,beforeCreate?:(session:Session)=>void) {
     const repo=this.config.repositories[session.repo];
     if(session.worktree)return;
     await git(repo.path,['fetch','origin',repo.baseBranch],{signal});
@@ -22,6 +22,7 @@ export class GitAdapter {
     session.branch=`codex/${session.productId?session.productId+'-':''}${session.id.toLowerCase()}`;
     session.worktree=join(this.config.dataDir,'worktrees',session.id);
     await mkdir(join(this.config.dataDir,'worktrees'),{recursive:true,mode:0o700});
+    beforeCreate?.(session);
     await git(repo.path,['worktree','add','-b',session.branch,session.worktree,session.baseSha],{signal});
   }
   async verifyScope(session:Session,signal?:AbortSignal) {
@@ -75,6 +76,11 @@ export class GitHubAdapter {
     }
   }
   pr(session:Session,signal?:AbortSignal){return this.request(`pulls/${session.prNumber}`,'GET',undefined,signal);}
+  async findPr(session:Session,signal?:AbortSignal){
+    const repo=this.config.repositories[this.repoName];
+    const prs=await this.request(`pulls?state=all&head=${encodeURIComponent(repo.github.split('/')[0]+':'+session.branch)}`,'GET',undefined,signal);
+    return prs.filter((pr:any)=>pr.base.ref===repo.baseBranch&&pr.head.sha===session.reviewSha);
+  }
   async verify(){const repo=await this.request('');if(!repo.permissions?.push)throw new Error('GitHub account lacks repository write permission');if(repo.default_branch!==this.config.repositories[this.repoName].baseBranch)throw new Error('GitHub default branch changed; refresh the project plan/configuration');}
   async merge(session:Session,signal?:AbortSignal) {
     const pr=await this.pr(session,signal);

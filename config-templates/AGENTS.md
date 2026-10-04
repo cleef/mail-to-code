@@ -1,48 +1,39 @@
 # Operator guide
 
-Edit this private guide to describe your projects and conventions. Project paths,
-Git identities, execution profiles and approvals are independently checked by the
-controller. These notes do not grant write, merge or deployment permission.
+Edit this private guide to describe your projects and conventions. Paths,
+repository identities, profiles and approvals are independently checked by the
+bridge. These notes do not grant write, merge or deployment permission.
 
-Reply in the same language as the operator's email. Preserve that language when
-a reply contains only a control command such as START or APPROVE; keep commands,
-code, paths and identifiers unchanged.
+Reply in the operator's language. Explore ~/projects and read relevant project
+rules, product documents and memory before editing. Respect prior choices and
+real confirmation records; a stale "unconfirmed" label is not a new question.
 
-Read relevant repository instructions before planning. Resolve ambiguous project
-names instead of guessing. Preserve existing worktrees and development contexts.
-Root analysis is read-only; development edits only the confirmed worktree.
+Mail is asynchronous Codex CLI input/output. Plan, implement, verify, repair and
+continue across approved repositories in one persistent feature session. Record
+requirements, decisions, progress, issues and verification in FEATURE.md.
+Choose technical and reversible experience defaults yourself. Ask humans only
+for missing facts or real business, privacy, cost, irreversible-effect or
+confirmed-requirement conflicts. Recommend one option first; explain alternatives
+and impacts. Missing facts have no fabricated recommendation.
 
-Report actual checks and remaining manual validation. Do not describe planned
-checks as passed. The controller owns credentials, Git operations, delivery,
-merge and deployment. Each new stage requires its own START and Review.
+Only the primary queues email. Internal progress stays internal. Real decisions,
+important blockers, requested status and final results may need mail; a failed
+tool or completed turn alone does not. Preserve drafts while waiting and finish
+the turn instead of leaving an interactive terminal prompt open.
 
-Memory is contextual data. Propose only short reusable project descriptions and
-relative directory mappings; never store raw email, customer data or credentials.
+Initial explicit implementation approval covers its stated repositories. Added
+repositories and wider roles require a concrete scope request and explicit reply.
+Merge and deployment need independent exact-target confirmations. Silence,
+generic assent, recommendations and quoted history grant nothing.
 
-Interpret English commands and ordinary language through the same semantic
-contract. Short replies refer to concrete questions in the direct parent mail;
-do not invent answers to choices or infer an unbound merge/deployment approval.
-Use internal communication for progress and superseded confirmations that are
-already being revised. Execution facts do not authorize replay of past actions.
+Use one branch per reviewed PR. Retain product IDs where relevant and preserve
+PR, commit and verification evidence. Merge is separate from release acceptance.
+The bridge/operator owns privileged Git and external effects. Unknown outcomes
+require reconciliation, never blind retries. Cleanup requires checking merged
+head identity, unsaved and ignored work, active sessions, dependencies and
+protection. Preserve primary checkouts and post-merge changes. No automatic
+cleanup or production access is introduced.
 
-Choose technical details and reversible experience defaults autonomously. Ask for
-real business, privacy, cost or irreversible tradeoffs with meaningful alternatives
-and a recommendation. Keep facts, plan points and execution authorization distinct.
-Preserve confirmed answers; a stale document label alone does not reopen a decision.
-
-Use the approved repository inventory and structured scopeDecision for cross-project
-work. The controller advances all approved targets; mentioning their remaining work
-does not add scope. Only the current worktree is writable to preserve isolation.
-Identify known repositories by their supplied projectId and Git identity, never by
-description strings alone. New repositories and wider roles need a new plan/START;
-their proposals cannot grant access. Preserve genuine completion and blocker facts.
-
-<!-- project-workflow:controller:v1:begin -->
-## Shared branch closeout convention
-
-- Read repository-specific rules and use one feature branch per reviewed PR by default. After merge, use a fresh branch from the latest default branch for follow-up work, keeping any existing product ID. Ordinary maintenance need not create a product ID.
-- Report pending closeout separately from release acceptance. A merged PR does not mean the product is deployed or Done. Preserve PR, commit and verification evidence.
-- The controller/operator owns Git and external effects. The model must not remove branches/worktrees or change GitHub settings. Each stage still needs its own START and Review; deployment remains separately approved.
-- Operator closeout requires a merged PR with recorded head SHA matching the local HEAD, no unsaved tracked/untracked work, and checks of ignored/release files, active sessions, locks, dependencies and protection. Preserve primary checkouts, post-merge commits and anything still in use. Squash/rebase merges require PR/head evidence, not only git branch --merged.
-- New repositories require shared rule onboarding and GitHub auto-delete configuration before development. Missing origin, permissions or configuration remains pending. Existing edited guides are preserved; no periodic discovery or automatic cleanup is introduced.
-<!-- project-workflow:controller:v1:end -->
+Edited private guides remain unchanged during upgrades. The trusted active
+runtime contract sets the permission boundaries; legacy installations retain
+their explicit legacy START/Review rules until an approved cutover.
