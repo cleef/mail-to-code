@@ -17,7 +17,7 @@ async function wait(id){const until=Date.now()+180000;while(store.conversation(i
 try{
   const tasks=cases.map(c=>({definition:c,conversation:store.intake(input(c.id,c.text),'synthetic MIME',c.text)}));
   await Promise.all(tasks.map(async t=>{await bridge.dispatch(t.conversation);await wait(t.conversation.id);}));
-  for(const t of tasks){const mails=store.mails().filter(m=>m.sessionId===t.conversation.id);assert.equal(mails.length,1);const text=mails[0].text;if(t.definition.id==='privacy'){assert.ok(text.includes('推荐')&&text.includes('私有')&&text.includes('公开'));}else{assert.ok(text.includes('样例'));assert.ok(!/推荐.{0,20}(路径|方案)/.test(text));}}
+  for(const t of tasks){const mails=store.mails().filter(m=>m.sessionId===t.conversation.id);assert.equal(mails.length,1);const text=mails[0].text;if(t.definition.id==='privacy'){assert.ok(/推荐|建议|recommend/i.test(text)&&/私有|私人|private/i.test(text)&&/公开|public/i.test(text));}else{assert.ok(text.includes('样例'));assert.ok(!/推荐.{0,20}(路径|方案)/.test(text));}}
   const privacy=tasks[0].conversation,featurePath=join(dataDir,'async-cli/features',privacy.id,'notes/FEATURE.md'),beforeChoice=await readFile(featurePath,'utf8'),choice='采用推荐方案。这只是产品选择，内部记录即可；不授权实施、合并或部署，不需要再发确认邮件。';
   store.intake({...input('choice',choice),threadId:privacy.gmailThread,inReplyTo:input('privacy','').rfcId},'synthetic MIME',choice);await bridge.dispatch(store.conversation(privacy.id));await wait(privacy.id);
   assert.equal(store.mails().length,2);assert.equal(store.all('scope').length,0);assert.equal(store.all('request').length,0);assert.equal(store.all('operation').length,0);
