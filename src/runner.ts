@@ -40,7 +40,7 @@ export function shellEnvironment():NodeJS.ProcessEnv { const result:NodeJS.Proce
 export function replyPolicy(cwd:string):string[]{
   return ['-c','approval_policy="never"','-c','default_permissions="mail-to-code-reply"','-c',`permissions.mail-to-code-reply.filesystem={":root"="deny",":minimal"="read",${JSON.stringify(cwd)}="read",":tmpdir"="write",":slash_tmp"="write"}`,'-c','permissions.mail-to-code-reply.network.enabled=false','-c','features.plugins=false','-c','features.hooks=false','-c','web_search="disabled"','-c','shell_environment_policy.inherit="core"'];
 }
-export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop',readPaths:string[]=[],analysis=false,trustedProjectLinks:string[]=[]):string[] {
+export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop',readPaths:string[]=[],analysis=false,trustedProjectLinks:string[]=[],additionalFilesystem:Record<string,string>={}):string[] {
   const filesystem:Record<string,string>={':root':'deny',':minimal':'read',[resolve(worktree)]:phase==='plan'?'read':'write',
     [join(worktree,'.git')]:'read',[join(worktree,'.codex')]:'read',[join(worktree,'.agents')]:'read',':tmpdir':'write',':slash_tmp':'write'};
   // Node's macOS builds load the system OpenSSL configuration during startup.
@@ -67,10 +67,17 @@ export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop'
     filesystem[configDir()]='deny';
     if(resolve(config.dataDir).startsWith(resolve(worktree)+'/'))filesystem[resolve(config.dataDir)]='deny';
     for(const p of readPaths)filesystem[resolve(p)]='read';
-    // A masked directory already hides its files; nested masks make bwrap try
-    // to create files inside an inaccessible/read-only mount.
-    for(const [p,value] of Object.entries(filesystem))if(value==='deny'&&!p.startsWith(':'))
-      for(const child of Object.keys(filesystem))if(child.startsWith(p+'/')&&filesystem[child]==='deny')delete filesystem[child];
+  }
+  Object.assign(filesystem,additionalFilesystem);
+  // Normalize the complete policy, including async masks. A denied parent already
+  // hides exact descendants, unless an intervening read/write rule reopens them.
+  // Keep glob masks: they also protect files created later in writable task roots.
+  const rules=Object.entries(filesystem);
+  for(const [child,permission] of rules) {
+    if(permission!=='deny'||!child.startsWith('/')||child.includes('*'))continue;
+    const covered=rules.some(([parent,value])=>value==='deny'&&parent.startsWith('/')&&!parent.includes('*')&&child.startsWith(parent+'/')&&
+      !rules.some(([allowed,access])=>access!=='deny'&&allowed.startsWith(parent+'/')&&!allowed.includes('*')&&(child===allowed||child.startsWith(allowed+'/'))));
+    if(covered)delete filesystem[child];
   }
   const filesystemToml='{'+Object.entries(filesystem).map(([key,value])=>`${JSON.stringify(key)}=${JSON.stringify(value)}`).join(',')+'}';
   const args=['-c','approval_policy="never"','-c','default_permissions="mail-to-code-task"',
