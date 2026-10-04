@@ -19,7 +19,7 @@ await Promise.all([mkdir(projectsRoot),mkdir(dataDir),mkdir(guideDir)]);
 // Avoid loading operator-edited private guides into a synthetic report.
 process.env.MAIL_TO_CODE_CONFIG_DIR=guideDir;
 const config=ConfigSchema.parse({gmailAddress:'agent@example.test',ownerAddress:'owner@example.test',projectsRoot,dataDir,codexCommand:command,timeoutSeconds:180,controllerRepository:'example/controller',previewEnabled:false});
-const store=new AsyncStore(join(dataDir,'synthetic.sqlite')),incoming={id:'synthetic-1',threadId:'synthetic-thread',rfcId:'<synthetic-1@example.test>',inReplyTo:'',subject:'Synthetic three-repository build repair',text:'继续已批准的三个仓库工作，修复 Web 的 TypeScript 编译失败，更新 mini 和 records 的分页说明并验证。技术细节由你决定，PC 默认10条、小程序6条。禁止合并、部署和真实邮件。',from:config.ownerAddress,trusted:true};
+const store=new AsyncStore(join(dataDir,'async-cli.sqlite')),incoming={id:'synthetic-1',threadId:'synthetic-thread',rfcId:'<synthetic-1@example.test>',inReplyTo:'',subject:'Synthetic three-repository build repair',text:'继续已批准的三个仓库工作，修复 Web 的 TypeScript 编译失败，更新 mini 和 records 的分页说明并验证。技术细节由你决定，PC 默认10条、小程序6条。禁止合并、部署和真实邮件。',from:config.ownerAddress,trusted:true};
 const c=store.intake(incoming,'synthetic MIME',incoming.text),featureDir=join(dataDir,'async-cli','features',c.id),worktrees=join(featureDir,'worktrees');await mkdir(worktrees,{recursive:true});
 const scopes=[];
 for(const name of ['web','mini','records']){

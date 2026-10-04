@@ -9,7 +9,7 @@ import {AsyncBridge} from '../dist/src/async-cli.js';
 process.umask(0o077);
 const root=await realpath(await mkdtemp(join(tmpdir(),'mail-async-questions-'))),dataDir=join(root,'state'),projectsRoot=join(root,'projects'),guides=join(root,'guides');
 await Promise.all([mkdir(dataDir),mkdir(projectsRoot),mkdir(guides)]);process.env.MAIL_TO_CODE_CONFIG_DIR=guides;
-const config=ConfigSchema.parse({gmailAddress:'agent@example.test',ownerAddress:'owner@example.test',dataDir,projectsRoot,codexCommand:process.env.ASYNC_CODEX_COMMAND||'codex',controllerRepository:'example/controller'}),store=new AsyncStore(join(dataDir,'synthetic.sqlite'));
+const config=ConfigSchema.parse({gmailAddress:'agent@example.test',ownerAddress:'owner@example.test',dataDir,projectsRoot,codexCommand:process.env.ASYNC_CODEX_COMMAND||'codex',controllerRepository:'example/controller'}),store=new AsyncStore(join(dataDir,'async-cli.sqlite'));
 const disabled=async()=>{throw Error('REAL_MAIL_DISABLED');},mail={profile:disabled,history:disabled,read:disabled,search:disabled,send:disabled},bridge=new AsyncBridge(config,store,mail);
 const input=(id,text)=>({id,threadId:'thread-'+id,rfcId:`<${id}@example.test>`,inReplyTo:'',subject:'Synthetic discussion '+id,text,from:config.ownerAddress,trusted:true});
 const cases=[{id:'privacy',text:'只有产品讨论，不授权实施。团队希望手稿默认公开便于发现，个人希望默认私有；负责人尚未选择。这是真实的重要隐私取舍。请发一封有推荐方案、理由、替代方案和影响的选择邮件，供负责人决定。记录到 FEATURE.md 后结束。不要调用任何 project_* 或授权工具。'},{id:'fact',text:'只有需求讨论，不授权实施。需要导入仅存在于负责人电脑的手稿样例，当前没有提供文件、目录、链接或内容，也不能访问负责人电脑。请明确发邮件索取缺少的客观材料，不要虚构样例、路径、答案或推荐选项。记录到 FEATURE.md 后结束。不要调用任何 project_* 或授权工具。'}];

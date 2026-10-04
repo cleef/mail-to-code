@@ -56,7 +56,7 @@ class FakeClient extends EventEmitter implements Client {
 async function fixture(complete = false) {
     const root = await mkdtemp(join(tmpdir(), 'async-test-')), config = ConfigSchema.parse({ gmailAddress: 'agent@example.test', ownerAddress: 'owner@example.test', dataDir: root, projectsRoot: join(root, 'projects') });
     await mkdir(config.projectsRoot);
-    const store = new AsyncStore(join(root, 'async.sqlite')), history = { thread: { id: 'codex-thread', turns: [] as any[] } }, clients: FakeClient[] = [], sends: any[] = [];
+    const store = new AsyncStore(join(root, 'async-cli.sqlite')), history = { thread: { id: 'codex-thread', turns: [] as any[] } }, clients: FakeClient[] = [], sends: any[] = [];
     const mail: MailTransport = { profile: async () => ({ emailAddress: config.gmailAddress, historyId: 'cursor' }), history: async () => ({ messages: [], cursor: 'cursor' }), search: async () => [], read: async () => { throw Error('Unavailable'); }, send: async (input) => { sends.push(input); return { id: 'sent', threadId: 'gmail-1' }; } };
     const bridge = new AsyncBridge(config, store, mail, async () => { const c = new FakeClient(history, complete); clients.push(c); return c; });
     return { root, config, store, history, clients, sends, mail, bridge };
