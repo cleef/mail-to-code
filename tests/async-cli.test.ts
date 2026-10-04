@@ -5,7 +5,7 @@ import { mkdtemp, readFile, writeFile, mkdir, symlink, realpath, stat } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { ConfigSchema } from '../src/config.js';
+import { ConfigSchema, configDir } from '../src/config.js';
 import { AsyncStore, type Conversation } from '../src/async-store.js';
 import { AsyncBridge, inputText, importLegacy, asyncPolicy, type Client } from '../src/async-cli.js';
 import { AsyncTools } from '../src/async-tools.js';
@@ -14,7 +14,7 @@ import type { Incoming } from '../src/types.js';
 import type { MailTransport } from '../src/delivery.js';
 import { git } from '../src/git.js';
 import { markdownHtml } from '../src/mail-markdown.js';
-import { Runner } from '../src/runner.js';
+import { Runner, codexPolicy } from '../src/runner.js';
 const incoming = (id: string, text = 'Implement the scoped feature'): Incoming => ({ id, threadId: 'gmail-1', rfcId: `<${id}@example.test>`, inReplyTo: '', subject: 'Synthetic feature', text, from: 'owner@example.test', trusted: true });
 class FakeClient extends EventEmitter implements Client {
     calls: {
@@ -275,6 +275,64 @@ test('sandbox is projects-root read-only with only feature worktrees/notes writa
     assert.ok(!policy.includes(JSON.stringify(join(f.config.projectsRoot, '.agents')) + '="read"'));
     assert.ok(!policy.includes(JSON.stringify(join(f.config.projectsRoot, '.git')) + '="read"'));
     f.store.close();
+});
+test('async masks collapse a token inside denied configuration but retain an external token', async () => {
+    const f = await fixture(), c = f.store.intake(incoming('masks'), 'raw', 'body');
+    const directory = join(f.root, 'config'), inside = join(directory, 'github-token'), outside = join(f.root, 'config-sibling', 'github-token');
+    await mkdir(directory);
+    await mkdir(join(f.root, 'config-sibling'));
+    await writeFile(inside, 'synthetic token');
+    await writeFile(outside, 'synthetic token');
+    const previous = process.env.MAIL_TO_CODE_CONFIG_DIR;
+    process.env.MAIL_TO_CODE_CONFIG_DIR = directory;
+    try {
+        f.config.githubTokenFile = inside;
+        let policy = asyncPolicy(f.config, c).join('\n');
+        assert.ok(policy.includes(JSON.stringify(directory) + '="deny"'));
+        assert.ok(!policy.includes(JSON.stringify(inside) + '="deny"'));
+        f.config.githubTokenFile = outside;
+        policy = asyncPolicy(f.config, c).join('\n');
+        assert.ok(policy.includes(JSON.stringify(outside) + '="deny"'));
+        assert.equal(configDir(), directory);
+    } finally {
+        if (previous === undefined) delete process.env.MAIL_TO_CODE_CONFIG_DIR;
+        else process.env.MAIL_TO_CODE_CONFIG_DIR = previous;
+        f.store.close();
+    }
+});
+test('complete policy keeps secret masks under reopened directories and future-file globs', async () => {
+    const f = await fixture(), parent = join(f.root, 'private'), tree = join(parent, 'task'), secret = join(tree, '.env'), nested = join(tree, 'secrets');
+    const rules = { [parent]: 'deny', [tree]: 'write', [secret]: 'deny', [nested]: 'deny', [join(nested, 'token')]: 'deny', [join(tree, '**/*.key')]: 'deny', [join(f.root, 'private-sibling', 'token')]: 'deny' };
+    const policy = codexPolicy(f.config, f.config.projectsRoot, 'plan', [], true, [], rules).join('\n');
+    for (const path of [parent, secret, nested, join(tree, '**/*.key'), join(f.root, 'private-sibling', 'token')])
+        assert.ok(policy.includes(JSON.stringify(path) + '="deny"'), path);
+    assert.ok(policy.includes(JSON.stringify(tree) + '="write"'));
+    assert.ok(!policy.includes(JSON.stringify(join(nested, 'token')) + '="deny"'));
+    f.store.close();
+});
+test('startup failure preserves queued input and retries it once in the same conversation', async () => {
+    const f = await fixture(), c = f.store.intake(incoming('startup'), 'raw', 'body'), clients: FakeClient[] = [];
+    const bridge = new AsyncBridge(f.config, f.store, f.mail, async () => {
+        const client = new FakeClient(f.history);clients.push(client);
+        if (clients.length === 1) client.request = async () => { throw Error('SYNTHETIC_SANDBOX_STARTUP_FAILURE'); };
+        return client;
+    });
+    try {
+        await assert.rejects(bridge.dispatch(c), /SYNTHETIC_SANDBOX_STARTUP_FAILURE/);
+        assert.equal(f.store.input('startup')!.status, 'queued');
+        assert.equal(f.store.conversation(c.id)!.codexThread, undefined);
+        assert.equal(clients[0].closed, true);
+        c.error = 'SYNTHETIC_SANDBOX_STARTUP_FAILURE';c.failures = 19;c.retryAt = Date.now();f.store.save(c);
+        await bridge.dispatch(f.store.conversation(c.id)!);
+        await bridge.dispatch(f.store.conversation(c.id)!);
+        const current = f.store.conversation(c.id)!;
+        assert.equal(current.codexThread, 'codex-thread');
+        for (const key of ['error', 'failures', 'retryAt'] as const) assert.equal(current[key], undefined);
+        assert.equal(f.store.input('startup')!.status, 'accepted');
+        assert.equal(clients[1].calls.filter(c => c.method === 'turn/start').length, 1);
+        assert.equal(f.store.mails().length, 0);
+        assert.equal(f.sends.length, 0);
+    } finally { await bridge.stop();f.store.close(); }
 });
 test('fresh same-subject mail starts a session; direct replies override provider grouping and older references', async () => {
     const f = await fixture(), a = f.store.intake(incoming('a'), 'raw', 'a'), b = f.store.intake(incoming('b'), 'raw', 'b');

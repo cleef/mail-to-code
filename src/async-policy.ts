@@ -7,9 +7,6 @@ import { projectLocations } from './async-projects.js';
 export function asyncPolicy(config: Config, c: Conversation) {
     const directory = join(config.dataDir, 'async-cli', 'features', c.id), worktrees = join(directory, 'worktrees'), notes = join(directory, 'notes');
     const locations = projectLocations(config);
-    const base = codexPolicy(config, config.projectsRoot, 'plan', locations.map(p => p.path), true, locations.map(p => p.entry));
-    const fsIndex = base.findIndex(x => x.startsWith('permissions.mail-to-code-task.filesystem='));
-    const value = base[fsIndex].slice(0, -1);
     const entries: Record<string, string> = { [worktrees]: 'write', [notes]: 'write', [join(directory, 'input')]: 'read', [join(worktrees, '**/.git')]: 'deny', [join(worktrees, '**/.codex')]: 'deny', [join(worktrees, '**/.agents')]: 'deny', [join(worktrees, '**/.env')]: 'deny', [join(worktrees, '**/.env.*')]: 'deny', [join(worktrees, '**/*.pem')]: 'deny', [join(worktrees, '**/*.key')]: 'deny', [join(worktrees, '**/.npmrc')]: 'deny', [join(expand('~/.codex'), 'auth.json')]: 'deny', [expand('~/.ssh')]: 'deny', [expand('~/.aws')]: 'deny', [expand('~/.netrc')]: 'deny' };
     if (config.githubTokenFile)
         entries[config.githubTokenFile] = 'deny';
@@ -34,7 +31,6 @@ export function asyncPolicy(config: Config, c: Conversation) {
     for (const [path, permission] of Object.entries(entries))
         if (permission === 'deny' && !path.includes('*') && !existsSync(path))
             delete entries[path];
-    base[fsIndex] = value + ',' + Object.entries(entries).map(([k, v]) => JSON.stringify(k) + '=' + JSON.stringify(v)).join(',') + '}';
     // No account MCP servers, plugins or hooks are inherited. Network is disabled for native tools.
-    return base;
+    return codexPolicy(config, config.projectsRoot, 'plan', locations.map(p => p.path), true, locations.map(p => p.entry), entries);
 }
