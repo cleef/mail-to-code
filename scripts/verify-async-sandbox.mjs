@@ -10,7 +10,7 @@ import {shellEnvironment,Runner} from '../dist/src/runner.js';
 const command=process.env.ASYNC_CODEX_COMMAND||'codex';
 assert.equal((await execute(command,['--version'])).stdout.trim(),`codex-cli ${ASYNC_CODEX_VERSION}`);
 const root=await realpath(await mkdtemp(join(tmpdir(),'mail-async-sandbox-'))),projectsRoot=join(root,'projects'),dataDir=join(root,'state'),c={id:'primary'},directory=join(dataDir,'async-cli/features',c.id),worktree=join(directory,'worktrees','demo'),notes=join(directory,'notes'),foreign=join(dataDir,'async-cli/features','foreign');
-await Promise.all([mkdir(projectsRoot,{recursive:true}),mkdir(worktree,{recursive:true}),mkdir(notes,{recursive:true}),mkdir(foreign,{recursive:true})]);
+await Promise.all([mkdir(projectsRoot,{recursive:true}),mkdir(worktree,{recursive:true}),mkdir(notes,{recursive:true}),mkdir(join(directory,'input'),{recursive:true}),mkdir(foreign,{recursive:true})]);
 const linked=join(root,'linked-repository');await mkdir(linked);await mkdir(join(linked,'.git'));await writeFile(join(linked,'README.md'),'linked source');await symlink(linked,join(projectsRoot,'linked'));
 const source=join(projectsRoot,'source.txt'),db=join(dataDir,'async-cli.sqlite'),secret=join(worktree,'.env'),git=join(worktree,'.git'),token=join(root,'bridge-token');
 await Promise.all([writeFile(source,'original'),writeFile(db,'synthetic runtime only'),writeFile(secret,'SYNTHETIC_SECRET=example'),writeFile(git,'synthetic git metadata'),writeFile(token,'synthetic token'),writeFile(join(foreign,'FEATURE.md'),'foreign private state')]);

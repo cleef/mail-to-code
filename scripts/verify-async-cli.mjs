@@ -60,6 +60,7 @@ try{
   store.intake({...incoming,id:'synthetic-2',inReplyTo:incoming.rfcId,rfcId:'<synthetic-2@example.test>',text:'在记录中补充取消编辑保留原标签的说明。完成后内部记录即可，不需要邮件。'},'synthetic MIME','在 records/pagination.md 补充取消编辑保留原标签；完成后内部记录即可，不需要邮件。');
   const thread=store.conversation(c.id).codexThread;await bridge.stop();
   const resumed=new AsyncBridge(config,store,mail);try{await resumed.dispatch(store.conversation(c.id));const until=Date.now()+120000;while(store.conversation(c.id).activeTurn&&Date.now()<until)await new Promise(r=>setTimeout(r,1000));assert.equal(store.conversation(c.id).codexThread,thread);assert.equal(store.conversation(c.id).activeTurn,undefined);assert.equal(store.mails().length,1);const recordAfter=await readFile(join(worktrees,'records','pagination.md'),'utf8');assert.notEqual(recordAfter,recordBefore);assert.ok(recordAfter.includes('取消')||/cancel/i.test(recordAfter));}finally{await resumed.stop();}
+  await Promise.all(['input','notes'].map(n=>mkdir(join(directDir,'async-cli','features','direct',n),{recursive:true})));
   const directConfig={...config,dataDir:directDir},directC={...c,id:'direct'},servers=JSON.parse((await execute(command,['mcp','list','--json'])).stdout);
   const directInstruction=instruction.replaceAll(worktrees,directTrees).replace('Write FEATURE.md, and queue exactly one final-result email through queue_mail.','Write a completion note to '+join(directTrees,'RESULT.md')+'. Do not send mail; there is no mail tool.');
   const directStarted=Date.now();

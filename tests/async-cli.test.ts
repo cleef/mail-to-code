@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, writeFile, mkdir, symlink, realpath } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, mkdir, symlink, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -67,6 +67,8 @@ test('new body and complete quoted history reach the same session without a busi
     await f.bridge.dispatch(c);
     const client = f.clients[0], start = client.calls.find(c => c.method === 'thread/start')!;
     assert.equal(start.params.cwd, f.config.projectsRoot);
+    for (const name of ['input', 'notes', 'worktrees'])
+        assert.ok((await stat(join(f.root, 'async-cli', 'features', c.id, name))).isDirectory());
     assert.ok(start.params.dynamicTools.some((t: any) => t.name === 'queue_mail'));
     assert.ok(!('outputSchema' in client.calls.find(c => c.method === 'turn/start')!.params));
     const second = { ...incoming('two', '采用推荐方案；暂不合并和部署'), inReplyTo: i.rfcId };

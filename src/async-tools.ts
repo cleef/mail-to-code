@@ -318,7 +318,7 @@ export class AsyncTools {
     }
     async initializeFeature() {
         const notes = join(this.directory(), 'notes');
-        await mkdir(notes, { recursive: true, mode: 0o700 });
+        await Promise.all(['notes', 'input', 'worktrees'].map(name => mkdir(join(this.directory(), name), { recursive: true, mode: 0o700 })));
         const path = join(notes, 'FEATURE.md');
         try {
             await stat(path);
