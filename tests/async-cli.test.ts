@@ -266,6 +266,8 @@ test('sandbox is projects-root read-only with only feature worktrees/notes writa
     assert.ok(policy.includes('network.enabled=false'));
     assert.ok(policy.includes('features.plugins=false'));
     assert.ok(policy.includes('auth.json'));
+    assert.ok(!policy.includes(JSON.stringify(join(f.config.projectsRoot, '.agents')) + '="read"'));
+    assert.ok(!policy.includes(JSON.stringify(join(f.config.projectsRoot, '.git')) + '="read"'));
     f.store.close();
 });
 test('fresh same-subject mail starts a session; direct replies override provider grouping and older references', async () => {

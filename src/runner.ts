@@ -1,7 +1,7 @@
 import {ScopeDecisionSchema,SCOPE_OUTPUT,SCOPE_GUIDANCE,scopeInventory,validateScope,ScopeResolutionError,type ScopeDecision} from './scope.js';
 import {QuestionInputSchema,QUESTION_OUTPUT,DECISION_GUIDANCE} from './questions.js';
 import {MailBriefSchema,MAIL_BRIEF_OUTPUT,MAIL_BRIEF_PROMPT,MAIL_LANGUAGE_PROMPT} from './mail-brief.js';
-import {readdirSync} from 'node:fs';
+import {readdirSync,existsSync} from 'node:fs';
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -60,6 +60,10 @@ export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop'
   };for(const root of [worktree,...readPaths,...(config.productDocs?[config.productDocs]:[])])scan(resolve(root));
   // CLI -c splits dotted keys literally: pass quoted paths as an inline TOML table.
   if(analysis){
+    // Bubblewrap cannot create missing read-only mount points inside a read-only
+    // project root. Missing children inherit the parent policy without a mount.
+    for(const [path,permission] of Object.entries(filesystem))
+      if(permission==='read' && path.startsWith('/') && !existsSync(path))delete filesystem[path];
     filesystem[configDir()]='deny';
     if(resolve(config.dataDir).startsWith(resolve(worktree)+'/'))filesystem[resolve(config.dataDir)]='deny';
     for(const p of readPaths)filesystem[resolve(p)]='read';
