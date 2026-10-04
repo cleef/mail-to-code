@@ -49,7 +49,7 @@ try{
   while(store.conversation(c.id).activeTurn&&Date.now()<deadline){await new Promise(r=>setTimeout(r,1000));if(store.conversation(c.id).error)throw Error(store.conversation(c.id).error);}
   assert.equal(store.conversation(c.id).activeTurn,undefined,'Codex did not finish synthetic work');
   await execute(process.execPath,compilerCommand);
-  for(const n of ['mini','records']){const text=await readFile(join(worktrees,n,'pagination.md'),'utf8');assert.ok(text.includes('6')&&text.includes('10')&&!text.includes('Implementation pending'));}
+  for(const n of ['mini','records']){const text=await readFile(join(worktrees,n,'pagination.md'),'utf8');assert.ok(/\b6\b|\bsix\b|六/i.test(text)&&/\b10\b|\bten\b|十/i.test(text)&&!text.includes('Implementation pending'));}
   assert.equal(store.mails().length,1,'Unnecessary discussion or intermediate email');
   assert.equal(store.all('request').length,0,'Unnecessary execution approval');
   assert.deepEqual(store.get('scope',c.id),scopes);
