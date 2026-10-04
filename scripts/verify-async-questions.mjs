@@ -18,9 +18,9 @@ try{
   const tasks=cases.map(c=>({definition:c,conversation:store.intake(input(c.id,c.text),'synthetic MIME',c.text)}));
   await Promise.all(tasks.map(async t=>{await bridge.dispatch(t.conversation);await wait(t.conversation.id);}));
   for(const t of tasks){const mails=store.mails().filter(m=>m.sessionId===t.conversation.id);assert.equal(mails.length,1);const text=mails[0].text;if(t.definition.id==='privacy'){assert.ok(text.includes('推荐')&&text.includes('私有')&&text.includes('公开'));}else{assert.ok(text.includes('样例'));assert.ok(!/推荐.{0,20}(路径|方案)/.test(text));}}
-  const privacy=tasks[0].conversation,choice='采用推荐方案。这只是产品选择，内部记录即可；不授权实施、合并或部署，不需要再发确认邮件。';
+  const privacy=tasks[0].conversation,featurePath=join(dataDir,'async-cli/features',privacy.id,'notes/FEATURE.md'),beforeChoice=await readFile(featurePath,'utf8'),choice='采用推荐方案。这只是产品选择，内部记录即可；不授权实施、合并或部署，不需要再发确认邮件。';
   store.intake({...input('choice',choice),threadId:privacy.gmailThread,inReplyTo:input('privacy','').rfcId},'synthetic MIME',choice);await bridge.dispatch(store.conversation(privacy.id));await wait(privacy.id);
   assert.equal(store.mails().length,2);assert.equal(store.all('scope').length,0);assert.equal(store.all('request').length,0);assert.equal(store.all('operation').length,0);
-  const feature=await readFile(join(dataDir,'async-cli/features',privacy.id,'notes/FEATURE.md'),'utf8');assert.ok(feature.includes('私有'));assert.ok(feature.includes('确认')||feature.includes('采用'));
+  const feature=await readFile(featurePath,'utf8');assert.notEqual(feature,beforeChoice);assert.ok(/私有|\bprivate\b/i.test(feature));assert.ok(/确认|采用|采纳|\b(?:confirmed|chosen|adopted|selected)\b/i.test(feature));
   console.log(JSON.stringify({choicesWithRecommendation:true,missingFactWithoutInventedAnswer:true,recommendationReplyRecorded:true,implementationGrants:0,operationGrants:0,realMailSent:0,businessEffects:0}));
 }finally{await bridge.stop();store.close();}

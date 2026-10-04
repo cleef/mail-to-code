@@ -159,6 +159,7 @@ calling a model: runtime database, token, secret file, foreign feature and Git
 metadata access must fail; original-checkout writes must fail; task-note writes
 must succeed. A synthetic run on Codex 0.159.2 completed the three-repository
 repair with one task prompt, zero scope reconfirmations and one final queued
-mail, then accepted one follow-up in the same thread. The bridge and direct CLI
-each completed the initial task in about two minutes in that single sample.
-Timing is sample evidence, not a general performance guarantee.
+mail, then accepted one follow-up in the same thread. In a Linux run, the bridge took
+about 193 seconds and direct CLI about 146 seconds; both used one initial human
+prompt. Earlier macOS runs were about two minutes each. Timing is sample evidence,
+not a guarantee of equal latency or general performance.
