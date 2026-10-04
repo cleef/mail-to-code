@@ -51,6 +51,21 @@ async function main(){
   }
   const config=await loadConfig();await privateDir(config.dataDir);
   if(command==='auth'){await authorize(config);return;}
+  if(command==='serve-async'||command==='serve'&&config.engine==='async-cli'){
+    await (await import('./async-cli.js')).serveAsync(config);return;
+  }
+  if(command==='async-doctor'||command==='doctor'&&config.engine==='async-cli'){const result=await(await import('./async-cli.js')).doctorAsync(config);console.log(JSON.stringify(result,null,2));if(!result.ok)process.exitCode=2;return;}
+  if(command==='async-status'||command==='async-import'||command==='async-adopt'||command==='async-reconcile'||command==='async-reconcile-input'||command==='async-reconcile-send'){
+    const {AsyncStore}=await import('./async-store.js'),{importLegacy}=await import('./async-cli.js');
+    const release=command==='async-status'?async()=>{}:await acquireLease(config.dataDir),asyncStore=new AsyncStore(join(config.dataDir,'async-cli.sqlite'),command==='async-status');
+    try{
+      if(command==='async-reconcile-input'){if(!process.argv.includes('--verified-not-accepted'))throw Error('Inspect native thread history and effects first: async-reconcile-input <input-id> --verified-not-accepted');console.log(JSON.stringify(asyncStore.requeueInput(process.argv[3])));}
+      else if(command==='async-reconcile-send'){const {AsyncBridge}=await import('./async-cli.js'),gmail=await GmailClient.create(config);await gmail.verify();console.log(JSON.stringify(await new AsyncBridge(config,asyncStore,gmail).reconcileSend(process.argv[3],process.argv.includes('--verified-absent'))));}
+      else if(command==='async-reconcile'){const c=asyncStore.conversation(process.argv[3]);if(!c||!process.argv[4])throw Error('async-reconcile <feature-id> <operation-id> [--verified-no-effect]');const {AsyncTools}=await import('./async-tools.js');console.log(JSON.stringify(await new AsyncTools(config,asyncStore,c,new AbortController().signal).reconcile(process.argv[4],process.argv.includes('--verified-no-effect'))));}
+      else if(command==='async-adopt'){const c=asyncStore.conversation(process.argv[3]);if(!c?.paused||!process.argv.includes('--verified-runtime'))throw Error('async-adopt <id> --verified-runtime: first inspect actual versions, worktrees and uncertain operations; old approvals are never restored');c.paused=false;asyncStore.save(c);console.log(JSON.stringify({id:c.id,adopted:true,replayed:0,restoredGrants:0}));}
+      else console.log(JSON.stringify(command==='async-import'?importLegacy(asyncStore,join(config.dataDir,'state.sqlite')):{conversations:asyncStore.conversations(),pendingInputs:asyncStore.inputs().filter(e=>e.status!=='accepted').map(e=>({id:e.id,status:e.status})),outbox:asyncStore.mails().map(m=>({id:m.id,status:m.status,identity:m.identityStatus})),operations:asyncStore.all('operation')},null,2));}
+    finally{asyncStore.close();await release();}return;
+  }
   if(command==='doctor'){if(!await doctor(config))process.exitCode=2;return;}
   const store=new Store(join(config.dataDir,'state.sqlite')),registry=new ProjectRegistry(config,store);
   if(command==='memory'){const memory=new ProjectMemoryService(config,store);const action=process.argv[3];if(action==='forget'){const path=process.argv[4];if(!path)throw new Error('memory forget <project-relative-path>');await memory.forget(path);console.log('Project lookup memory removed');}else if(!action)console.log(JSON.stringify(memory.inspect(),null,2));else throw new Error('memory [forget <project-relative-path>]');store.close();return;}

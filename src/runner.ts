@@ -40,9 +40,11 @@ export function shellEnvironment():NodeJS.ProcessEnv { const result:NodeJS.Proce
 export function replyPolicy(cwd:string):string[]{
   return ['-c','approval_policy="never"','-c','default_permissions="mail-to-code-reply"','-c',`permissions.mail-to-code-reply.filesystem={":root"="deny",":minimal"="read",${JSON.stringify(cwd)}="read",":tmpdir"="write",":slash_tmp"="write"}`,'-c','permissions.mail-to-code-reply.network.enabled=false','-c','features.plugins=false','-c','features.hooks=false','-c','web_search="disabled"','-c','shell_environment_policy.inherit="core"'];
 }
-export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop',readPaths:string[]=[],analysis=false):string[] {
+export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop',readPaths:string[]=[],analysis=false,trustedProjectLinks:string[]=[]):string[] {
   const filesystem:Record<string,string>={':root':'deny',':minimal':'read',[resolve(worktree)]:phase==='plan'?'read':'write',
     [join(worktree,'.git')]:'read',[join(worktree,'.codex')]:'read',[join(worktree,'.agents')]:'read',':tmpdir':'write',':slash_tmp':'write'};
+  // Node's macOS builds load the system OpenSSL configuration during startup.
+  if(process.platform==='darwin')filesystem['/System/Library/OpenSSL']='read';
   for(const p of readPaths)if(resolve(p)!==resolve(worktree))filesystem[resolve(p)]='read';
   if(config.productDocs)filesystem[config.productDocs]='read';
   for(const repo of Object.values(config.repositories)) {
@@ -52,7 +54,7 @@ export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop'
   // A checkout may contain tracked production credentials. Deny conventional
   // secret files explicitly, including in other read-only task repositories.
   const scan=(root:string)=>{let entries;try{entries=readdirSync(root,{withFileTypes:true});}catch{return;}
-    for(const e of entries){const path=join(root,e.name),secret=(analysis&&(e.name==='.git'||e.isSymbolicLink()))||['.ssh','.aws','.gnupg','.config','.codex','.npmrc','.pypirc','.netrc','auth.json'].includes(e.name)||/\.(pem|key)$/.test(e.name)||/^\.env($|\.)/.test(e.name)&&!['.env.example','.env.sample'].includes(e.name);
+    for(const e of entries){const path=join(root,e.name),secret=(analysis&&(e.name==='.git'||e.isSymbolicLink()&&!trustedProjectLinks.includes(path)))||['.ssh','.aws','.gnupg','.config','.codex','.npmrc','.pypirc','.netrc','auth.json'].includes(e.name)||/\.(pem|key)$/.test(e.name)||/^\.env($|\.)/.test(e.name)&&!['.env.example','.env.sample'].includes(e.name);
       if(secret){filesystem[path]='deny';continue;}if(e.isDirectory()&&!['.git','node_modules','dist','dist-h5','.run','.release'].includes(e.name))scan(path);
     }
   };for(const root of [worktree,...readPaths,...(config.productDocs?[config.productDocs]:[])])scan(resolve(root));

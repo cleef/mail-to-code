@@ -156,7 +156,17 @@ User lingering keeps the service running after logout. Podman and `./scripts/bui
 require screenshots or isolated test services. See [operations](docs/operations.md)
 for upgrades, backups and recovery.
 
-## Usage
+## Asynchronous CLI engine (opt-in)
+
+The new `async-cli` engine delivers mail directly to one persistent Codex feature
+conversation starting in `~/projects` on the service host. Fresh email starts a
+new session; replies continue the original session, including after a restart.
+Work continues within approved scope;
+progress lives in `FEATURE.md`. Only the primary queues meaningful email. Merge
+and deployment remain independently confirmed. Existing installations retain
+the legacy engine. See [architecture, cutover and validation](docs/async-cli.md).
+
+## Legacy engine usage
 
 **Email language:** write requests in your preferred language. The operator guide
 and model instructions tell the agent to use the same language for generated
