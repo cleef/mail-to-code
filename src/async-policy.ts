@@ -1,5 +1,5 @@
-import { join } from 'node:path';
-import { readdirSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { readdirSync, existsSync, realpathSync } from 'node:fs';
 import { expand, type Config } from './config.js';
 import type { Conversation } from './async-store.js';
 import { codexPolicy } from './runner.js';
@@ -10,6 +10,13 @@ export function asyncPolicy(config: Config, c: Conversation) {
     const entries: Record<string, string> = { [worktrees]: 'write', [notes]: 'write', [join(directory, 'input')]: 'read', [join(worktrees, '**/.git')]: 'deny', [join(worktrees, '**/.codex')]: 'deny', [join(worktrees, '**/.agents')]: 'deny', [join(worktrees, '**/.env')]: 'deny', [join(worktrees, '**/.env.*')]: 'deny', [join(worktrees, '**/*.pem')]: 'deny', [join(worktrees, '**/*.key')]: 'deny', [join(worktrees, '**/.npmrc')]: 'deny', [join(expand('~/.codex'), 'auth.json')]: 'deny', [expand('~/.ssh')]: 'deny', [expand('~/.aws')]: 'deny', [expand('~/.netrc')]: 'deny' };
     if (config.githubTokenFile)
         entries[config.githubTokenFile] = 'deny';
+    entries[join(config.dataDir, 'operation-locks')] = 'deny';
+    for (const repo of Object.values(config.repositories)) for (const operation of Object.values(repo.operations || {})) {
+        for (const script of [operation.script, operation.reconcileScript].filter((s): s is string => !!s)) {
+            entries[dirname(script)] = 'deny';
+            try { entries[dirname(realpathSync(script))] = 'deny'; } catch { /* A missing script will fail closed at execution. */ }
+        }
+    }
     for (const db of ['async-cli.sqlite', 'state.sqlite'])
         for (const suffix of ['', '-wal', '-shm'])
             entries[join(config.dataDir, db + suffix)] = 'deny';
