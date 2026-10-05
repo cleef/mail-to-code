@@ -41,6 +41,12 @@ commands use configured source domains and the sandbox adapter. Account MCP
 servers, plugins and hooks are disabled. Credentials remain in the bridge's
 Gmail, GitHub and trusted deployment adapters.
 
+Optional [controlled operations](controlled-operations.md) extend the bridge with
+administrator-owned scripts. New threads receive `project_operations` and
+`project_operation`; existing 0.159.2 threads use the fixed `project_command`
+compatibility entry. Production writes require explicit new-body authorization,
+and configured deployment prerequisites run before the deployment effect.
+
 An explicit initial implementation request may authorize its stated scope.
 Added repositories and reference-to-write changes need a concrete scope request
 and its explicit authenticated direct reply. The bridge validates evidence,

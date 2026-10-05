@@ -37,4 +37,10 @@ Profiles are inferred from immutable default-branch snapshots, or supplied expli
 
 Deployment is disabled by default. To enable it, configure a trusted repository-relative script, host, domain, remoteBase, healthPaths and argument list. Arguments may contain `{commit}`, `{release}`, `{host}`, `{domain}` and `{remoteBase}` placeholders. The script must match the original trusted baseline. Deployment still needs a separate latest confirmation.
 
+Async installations may add private `repositories.<project>.operations` and
+ordered `deployment.preDeployOperations`. These use trusted external scripts,
+not ordinary build profiles or arbitrary model shell commands. See
+[controlled operations](controlled-operations.md) for configuration, authorization,
+script results, existing-thread compatibility and uncertain-effect recovery.
+
 `controllerRepository` is inferred from the installation's GitHub origin unless explicitly supplied. `protectedRepositories` can preserve manual-only controller identities during transitions. Credentials must never appear in profiles or guides.

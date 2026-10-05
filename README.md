@@ -166,6 +166,12 @@ progress lives in `FEATURE.md`. Only the primary queues meaningful email. Merge
 and deployment remain independently confirmed. Existing installations retain
 the legacy engine. See [architecture, cutover and validation](docs/async-cli.md).
 
+Administrator-configured [controlled operations](docs/controlled-operations.md)
+let the async controller run trusted inspection/backup scripts over SSH or another
+transport. Scripts and credentials stay private; Codex chooses only configured
+operations. Deployment can require verified prerequisites before its trusted
+script runs. This feature is disabled until an administrator configures it.
+
 ## Legacy engine usage
 
 **Email language:** write requests in your preferred language. The operator guide
