@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-export interface ProcessOptions {cwd?:string;env?:NodeJS.ProcessEnv;signal?:AbortSignal;timeoutMs?:number;onStdout?:(text:string)=>void;maxOutput?:number}
+export interface ProcessOptions {cwd?:string;env?:NodeJS.ProcessEnv;signal?:AbortSignal;timeoutMs?:number;onStdout?:(text:string)=>void;onStderr?:(text:string)=>void;maxOutput?:number}
 export async function execute(command:string,args:string[],options:ProcessOptions={}):Promise<{stdout:string;stderr:string}> {
   if(options.signal?.aborted)throw new Error('CANCELLED');
   return new Promise((resolve,reject)=>{
@@ -11,7 +11,7 @@ export async function execute(command:string,args:string[],options:ProcessOption
     options.signal?.addEventListener('abort',terminate,{once:true});
     const cleanup=()=>{clearTimeout(timer);clearTimeout(force);options.signal?.removeEventListener('abort',terminate);};
     child.stdout.on('data',(chunk:Buffer)=>{const text=chunk.toString();options.onStdout?.(text);stdout=(stdout+text).slice(-cap);});
-    child.stderr.on('data',(chunk:Buffer)=>{stderr=(stderr+chunk.toString()).slice(-cap);});
+    child.stderr.on('data',(chunk:Buffer)=>{const text=chunk.toString();options.onStderr?.(text);stderr=(stderr+text).slice(-cap);});
     child.once('error',e=>{if(ended)return;ended=true;cleanup();reject(e);});
     child.once('close',code=>{if(ended)return;ended=true;cleanup();
       if(code===0&&!timedOut&&!options.signal?.aborted)resolve({stdout,stderr});

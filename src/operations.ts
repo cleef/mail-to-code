@@ -6,6 +6,9 @@ import type { Config } from './config.js';
 import type { AsyncStore, Operation } from './async-store.js';
 import { execute } from './process.js';
 import { acquireLease } from './lease.js';
+import { OperationJournal } from './operation-report.js';
+import { OperationResultSchema, type OperationResult } from './operation-result.js';
+export { OperationResultSchema, type OperationResult } from './operation-result.js';
 
 const argument = z.string().max(4096).refine(v => !v.includes('\0'), 'NUL is not allowed');
 const script = z.string().startsWith('/').refine(v => !/[\r\n\0]/.test(v), 'Expected an absolute script path');
@@ -16,11 +19,6 @@ export const OperationSchema = z.object({
     reconcileScript: script.optional()
 }).strict();
 export const OperationIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
-export const OperationResultSchema = z.object({
-    ok: z.boolean(), summary: z.string().max(4000),
-    evidence: z.record(z.union([z.string().max(4000), z.number().finite(), z.boolean(), z.null()])).refine(v => Object.keys(v).length <= 100)
-}).strict();
-export type OperationResult = z.infer<typeof OperationResultSchema>;
 export interface OperationBinding {
     project: string; repository: string; operation: string; target: string; effect: 'read' | 'write'; fingerprint: string;
 }
@@ -105,20 +103,23 @@ export class OperationsAdapter {
         const executable = await trustedScript(this.config, path);
         let result: { stdout: string; stderr: string };
         let outputBytes = 0;
+        const journal = new OperationJournal(this.config, this.store, operationId);
+        journal.update({ stage: binding.operation });
         try {
             result = await execute(executable.path, d.args, {
                 cwd: dirname(executable.path), signal, timeoutMs: d.timeoutSeconds * 1000, maxOutput: 65537,
-                onStdout: text => { outputBytes += Buffer.byteLength(text); },
+                onStdout: text => { outputBytes += Buffer.byteLength(text); journal.onStdout(text); }, onStderr: journal.onStderr,
                 env: { ...shellEnvironment(), ...(process.env.SSH_AUTH_SOCK ? { SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK } : {}),
                     MAIL_TO_CODE_OPERATION_ID: operationId, MAIL_TO_CODE_OPERATION_TARGET: binding.target,
                     MAIL_TO_CODE_OPERATION_FINGERPRINT: binding.fingerprint }
             });
-        } catch { throw Error('OPERATION_EXECUTION_UNCERTAIN'); }
+        } catch (error) { journal.failed(error); throw Error('OPERATION_EXECUTION_UNCERTAIN'); }
+        finally { journal.close(); }
         if (digest(await this.binding(binding.project, binding.operation)) !== digest(binding)) throw Error('OPERATION_CONFIGURATION_CHANGED');
         try {
             if (outputBytes > 65536) throw Error();
             return OperationResultSchema.parse(JSON.parse(result.stdout));
-        } catch { throw Error('OPERATION_INVALID_RESULT'); }
+        } catch { journal.failed(Error('OPERATION_INVALID_RESULT')); throw Error('OPERATION_INVALID_RESULT'); }
     }
     async run(project: string, operation: string, key: string, authorization: unknown, signal: AbortSignal, expected?: OperationBinding) {
         const binding = await this.binding(project, operation);
@@ -126,17 +127,22 @@ export class OperationsAdapter {
         return this.store.effect(this.conversationId, 'operation:' + project + ':' + key, { ...binding, authorization }, async () => {
             const operationId = this.conversationId + ':operation:' + project + ':' + key;
             const result = await this.invoke(binding, operationId, signal);
+            const op = this.store.get<Operation>('operation', operationId)!;
+            if (op.report) { op.report.status = result.ok ? 'succeeded' : 'confirmed-failed'; this.store.put('operation', op.id, op); }
             return { ...result, operationId, target: binding.target, fingerprint: binding.fingerprint, completedAt: new Date().toISOString() };
         });
     }
     async preDeploy(project: string, requestId: string, signal: AbortSignal, approvedFingerprint: string, attemptId: string) {
+        const receipts = [];
         this.assertNoUncertainWrites(project, this.conversationId + ':deploy:' + requestId);
         if (await this.deployFingerprint(project) !== approvedFingerprint) throw Error('APPROVED_OPERATION_TARGET_CHANGED');
         for (const operation of this.config.repositories[project].deployment?.preDeployOperations || []) {
             const result = await this.run(project, operation, 'deploy-' + digest({ requestId, attemptId, operation }), { deployRequestId: requestId, attemptId }, signal);
+            receipts.push(result);
             if (!result.ok) throw Error('PREDEPLOY_OPERATION_FAILED');
         }
         if (await this.deployFingerprint(project) !== approvedFingerprint) throw Error('APPROVED_OPERATION_TARGET_CHANGED');
+        return receipts;
     }
     async reconcile(op: Operation, signal: AbortSignal) {
         const input = op.input as OperationBinding;

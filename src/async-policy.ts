@@ -11,6 +11,7 @@ export function asyncPolicy(config: Config, c: Conversation) {
     if (config.githubTokenFile)
         entries[config.githubTokenFile] = 'deny';
     entries[join(config.dataDir, 'operation-locks')] = 'deny';
+    entries[join(config.dataDir, 'effect-logs')] = 'deny';
     for (const repo of Object.values(config.repositories)) for (const operation of Object.values(repo.operations || {})) {
         for (const script of [operation.script, operation.reconcileScript].filter((s): s is string => !!s)) {
             entries[dirname(script)] = 'deny';

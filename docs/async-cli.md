@@ -66,7 +66,13 @@ that operation approval rather than the feature's implementation scope.
 
 ## Communication and recovery
 
-The primary explicitly calls `queue_mail` for a real decision, important blocker,
+New installation templates enable `asyncMailOutput: "assistant-final"`: the native
+final assistant reply becomes the email, unchanged except for Markdown/MIME
+formatting. Commentary remains internal. See [final replies and confirmations](final-replies.md)
+for delivery recovery, private-guide migration and older-thread compatibility.
+Existing configuration without this field retains `"queue-mail"`.
+
+In queue-mail mode the primary explicitly calls `queue_mail` for a real decision, important blocker,
 requested status or final result. Tool failures, internal progress and completed
 turns do not create email. Escaped Markdown HTML accompanies the identical text
 snapshot. When waiting for a human, preserve the draft and finish the turn.
@@ -150,6 +156,7 @@ validate model discovery as well as direct adapter execution:
 
 ```sh
 node scripts/verify-operation-resume.mjs
+node scripts/verify-final-mail.mjs
 ```
 
 This Linux/Codex 0.159.2 check seeds a synthetic thread with old capability notes

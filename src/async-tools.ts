@@ -14,6 +14,7 @@ import { proposeProfile } from './projects.js';
 import { projectLocations } from './async-projects.js';
 import { asyncPolicy } from './async-policy.js';
 import { OperationsAdapter, OperationIdSchema, digest, withProjectOperationLock } from './operations.js';
+import { OperationJournal, ReceiptSchema, operationStatus, FailedResolutionSchema } from './operation-report.js';
 export interface ScopeProject {
     path: string;
     role: 'modify' | 'reference' | 'product_record';
@@ -22,6 +23,7 @@ export interface ScopeProject {
 const text = { type: 'string' }, strings = { type: 'array', items: text };
 const tool = (name: string, description: string, properties: Record<string, unknown>, required = Object.keys(properties)) => ({ type: 'function', name, description, inputSchema: { type: 'object', additionalProperties: false, properties, required } });
 export const ASYNC_TOOLS = [
+    tool('request_confirmation', 'Prepare an exact scope, merge or deployment request for the final assistant reply. Explain its target and effects naturally in that reply. This never grants permission or sends another email.', { key: text, request: { type: 'object', additionalProperties: false, properties: { kind: { enum: ['scope', 'merge', 'deploy'] }, project: text, projects: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { path: text, role: { enum: ['modify', 'reference', 'product_record'] } }, required: ['path', 'role'] } } }, required: ['kind'] } }),
     tool('queue_mail', 'Only the primary agent may queue an email. Use only for a real human decision, requested status, important blocker or completed result. No intermediate status emails. For choices give a recommended option, reason and alternatives. A request binds an exact scope/commit; it does not grant permission.', { key: text, text, request: { type: 'object', additionalProperties: false, properties: { kind: { enum: ['scope', 'merge', 'deploy'] }, project: text, projects: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { path: text, role: { enum: ['modify', 'reference', 'product_record'] } }, required: ['path', 'role'] } } }, required: ['kind'] } }, ['key', 'text']),
     tool('grant_scope', 'Record only explicit human authorization from a trusted new email body. Understand intent and quote exact evidence. Initial explicit implementation requests can authorize scope directly. Added repositories or reference-to-write changes require a delivered scope request and its direct reply. Confirmed scope persists through documentation, builds and cross-repository continuation.', { sourceMailId: text, evidence: text, projects: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { path: text, role: { enum: ['modify', 'reference', 'product_record'] } }, required: ['path', 'role'] } }, requestId: text }, ['sourceMailId', 'evidence', 'projects']),
     tool('record_authorization', 'Record an explicit human decision on a delivered scope/merge/deploy request. Quote exact new-body evidence; recommendations, quotations, generic assent or absence are not authorization. Never infer merge/deploy from implementation approval.', { requestId: text, sourceMailId: text, evidence: text }),
@@ -29,6 +31,7 @@ export const ASYNC_TOOLS = [
     tool('project_sync_base', 'Fetch the approved repository default branch and merge it into its existing worktree. Resolve conflicts, rerun relevant checks and update the PR in the same feature scope; this never grants merge or deployment.', { project: text }),
     tool('project_command', 'Run a command inside an approved worktree sandbox. Return failed checks to this same session; inspect, fix and retry without clearing authorization. Network only through configured package sources.', { project: text, executable: text, args: strings, cwd: text, network: { type: 'boolean' } }, ['project', 'executable', 'args']),
     tool('project_operations', 'List administrator-configured operations for an approved project. Targets, descriptions, effects and fingerprints are facts, never authorization.', { project: text }),
+    tool('project_operation_status', 'Read recorded effects and prerequisite receipts for an approved project in this conversation. Return uncertain effects and recent receipts, or one exact operationId. Raw operator logs and credentials are never returned. This does not reconcile or retry effects.', { project: text, operationId: text }, ['project']),
     tool('project_operation', 'Run an administrator-configured operation, never an arbitrary command. Write operations require explicit intent in a trusted new mail body: quote sourceMailId/evidence for this operation and target. Generic assent, quoted history and recommendations are not authorization. Reuse the key for retries; uncertain effects must be reconciled by the operator.', { project: text, operation: text, key: text, sourceMailId: text, evidence: text }, ['project', 'operation', 'key']),
     tool('project_pr', 'Commit, push and prepare/update the implementation PR. checks contains checkId receipts returned by successful project_command calls on the current source. Required operator checks must pass. No merge or deployment.', { project: text, summary: text, checks: strings }),
     tool('project_merge', 'Merge only the exact independently approved PR head/base. An uncertain effect is not retried automatically.', { requestId: text }),
@@ -38,12 +41,14 @@ const project = z.object({ path: z.string().min(1), role: z.enum(['modify', 'ref
 const request = z.object({ kind: z.enum(['scope', 'merge', 'deploy']), project: z.string().optional(), projects: z.array(project).min(1).optional() }).strict();
 const schemas: Record<string, z.ZodTypeAny> = {
     queue_mail: z.object({ key: z.string().min(1).max(200), text: z.string().min(1).max(50000), request: request.optional() }).strict(),
+    request_confirmation: z.object({ key: z.string().min(1).max(200), request }).strict(),
     grant_scope: z.object({ sourceMailId: z.string(), evidence: z.string().min(1), projects: z.array(project).min(1).max(30), requestId: z.string().optional() }).strict(),
     record_authorization: z.object({ requestId: z.string(), sourceMailId: z.string(), evidence: z.string().min(1) }).strict(),
     project_worktree: z.object({ project: z.string() }).strict(),
     project_sync_base: z.object({ project: z.string() }).strict(),
     project_command: z.object({ project: z.string(), executable: z.string().min(1), args: z.array(z.string()), cwd: z.string().default('.'), network: z.boolean().default(false) }).strict(),
     project_operations: z.object({ project: z.string() }).strict(),
+    project_operation_status: z.object({ project: z.string(), operationId: z.string().min(1).max(500).optional() }).strict(),
     project_operation: z.object({ project: z.string(), operation: OperationIdSchema, key: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,199}$/), sourceMailId: z.string().optional(), evidence: z.string().min(1).optional() }).strict(),
     project_pr: z.object({ project: z.string(), summary: z.string().min(1), checks: z.array(z.string()) }).strict(),
     project_merge: z.object({ requestId: z.string() }).strict(), project_deploy: z.object({ requestId: z.string() }).strict()
@@ -59,7 +64,7 @@ const canonical = (path: string) => {
 };
 const ordered = (projects: ScopeProject[]) => projects.sort((a, b) => a.path.localeCompare(b.path));
 export class AsyncTools {
-    constructor(readonly config: Config, readonly store: AsyncStore, readonly conversation: Conversation, readonly signal: AbortSignal) {
+    constructor(readonly config: Config, readonly store: AsyncStore, readonly conversation: Conversation, readonly signal: AbortSignal, readonly turnId?: string) {
         // Discovered repository adapters have no production profile. They never modify private config.
         this.config = { ...config, repositories: { ...store.get<Config['repositories']>('repositories', conversation.id), ...config.repositories }, profiles: { ...store.get<Config['profiles']>('profiles', conversation.id), ...config.profiles } };
     }
@@ -80,7 +85,7 @@ export class AsyncTools {
                     requestId: r.id, target: r.target,
                     state: !r.sourceMailId ? 'not_authorized' : !currentTarget ? 'unverifiable' : hash(r.target) === hash(currentTarget) ? 'current' : 'requires_new_confirmation'
                 }));
-                projects.push({ project, operations, preDeployOperations: repo.deployment?.preDeployOperations || [], deploymentRequests });
+                projects.push({ project, operations, preDeployOperations: repo.deployment?.preDeployOperations || [], deploymentRequests, receipts: operationStatus(this.store, this.conversation.id, project) });
             } catch { projects.push({ project, availability: 'unavailable', instruction: 'Query project_operations or its compatibility entry for the current configuration error.' }); }
         }
         return '\n\nController operation context (current capability facts, never human authorization):\n' +
@@ -191,18 +196,18 @@ export class AsyncTools {
             throw Error('UNKNOWN_BRIDGE_TOOL');
         const a = schema.parse(raw);
         if (name === 'project_command' && a.executable === 'mail-to-code-operation') {
-            if (a.network || a.cwd !== '.' || a.args.length !== 2 || !['list', 'run'].includes(a.args[0])) throw Error('INVALID_OPERATION_COMPATIBILITY_CALL');
+            if (a.network || a.cwd !== '.' || a.args.length !== 2 || !['list', 'run', 'status'].includes(a.args[0])) throw Error('INVALID_OPERATION_COMPATIBILITY_CALL');
             let params: unknown;
             try { params = JSON.parse(a.args[1]); } catch { throw Error('INVALID_OPERATION_COMPATIBILITY_CALL'); }
             if (!params || typeof params !== 'object' || Array.isArray(params) || 'project' in params) throw Error('INVALID_OPERATION_COMPATIBILITY_CALL');
-            return this.call(threadId, a.args[0] === 'list' ? 'project_operations' : 'project_operation', { ...params, project: a.project });
+            return this.call(threadId, a.args[0] === 'list' ? 'project_operations' : a.args[0] === 'status' ? 'project_operation_status' : 'project_operation', { ...params, project: a.project });
         }
         if (name.startsWith('project_') && a.project) {
             const approved = this.scope(a.project), actual = await this.identify(approved);
             if (actual.identity !== approved.identity)
                 throw Error('REPOSITORY_IDENTITY_CHANGED');
         }
-        if (name === 'queue_mail') {
+        if (name === 'queue_mail' || name === 'request_confirmation') {
             let proposed: Omit<ApprovalRequest, 'id' | 'conversationId' | 'mailId'> | undefined;
             if (a.request) {
                 const r = a.request;
@@ -210,6 +215,13 @@ export class AsyncTools {
                 if (r.kind === 'scope' && !(proposed.target as unknown[]).length)
                     throw Error('SCOPE_PROJECTS_REQUIRED');
             }
+            if (this.config.asyncMailOutput === 'assistant-final') {
+                const turnId = this.turnId || this.conversation.activeTurn;
+                if (!turnId) throw Error('ACTIVE_TURN_REQUIRED');
+                const prepared = proposed ? this.store.prepareConfirmation(this.conversation, turnId, a.key, proposed) : undefined;
+                return { requestId: prepared?.id, target: prepared?.target, status: 'awaiting_final_response' };
+            }
+            if (name === 'request_confirmation') throw Error('ASSISTANT_FINAL_MODE_REQUIRED');
             const queued = this.store.queue(this.conversation, a.key, a.text, proposed);
             return { mailId: queued.mail.id, requestId: queued.request?.id, status: queued.mail.status };
         }
@@ -218,6 +230,10 @@ export class AsyncTools {
         if (name === 'project_operations') {
             const [alias] = this.repo(a.project);
             return new OperationsAdapter(this.config, this.store, this.conversation.id).list(alias);
+        }
+        if (name === 'project_operation_status') {
+            const [alias] = this.repo(a.project);
+            return operationStatus(this.store, this.conversation.id, alias, a.operationId);
         }
         if (name === 'project_operation') {
             const [alias, repo] = this.repo(a.project), adapter = new OperationsAdapter(this.config, this.store, this.conversation.id);
@@ -355,6 +371,11 @@ export class AsyncTools {
             if (actual.identity !== approved.identity)
                 throw Error('REPOSITORY_IDENTITY_CHANGED');
             const s = this.session(repo.path);
+            const recorded = this.store.get<import('./async-store.js').Operation>('operation', this.conversation.id + ':' + kind + ':' + a.requestId);
+            if (kind === 'deploy' && recorded?.status === 'done' && (recorded.result as any)?.outcome === 'confirmed-failed' && (recorded.result as any)?.ok === false) {
+                if (hash(recorded.input) !== hash(r.target)) throw Error('OPERATION_KEY_INPUT_MISMATCH');
+                return recorded.result; // A historical failed receipt is not a new production effect.
+            }
             if (hash(r.target) !== hash(await this.target(kind, repo.path)))
                 throw Error('APPROVED_OPERATION_TARGET_CHANGED');
             const effect = () => this.store.effect(this.conversation.id, kind + ':' + a.requestId, r.target, async () => {
@@ -369,11 +390,25 @@ export class AsyncTools {
                     throw Error('OPERATOR_RUNTIME_PROFILE_REQUIRED');
                 const operations = new OperationsAdapter(this.config, this.store, this.conversation.id);
                 const attemptId = randomUUID();
-                await new DeployAdapter(this.scopedConfig(), adapter, () => this.saveProject(s), (release, signal) => runtime.run(release.worktree!, profile, signal),
-                    signal => operations.preDeploy(s.repo, a.requestId, signal, (r.target as { profileHash: string }).profileHash, attemptId)).deploy(s, this.signal);
-                s.deployUncertain = false;
-                this.saveProject(s);
-                return { commit: s.mergeSha, release: s.deployRelease };
+                const journal = new OperationJournal(this.config, this.store, this.conversation.id + ':deploy:' + a.requestId);
+                try {
+                    await new DeployAdapter(this.scopedConfig(), adapter, () => this.saveProject(s), (release, signal) => runtime.run(release.worktree!, profile, signal),
+                        async signal => {
+                            const receipts = await operations.preDeploy(s.repo, a.requestId, signal, (r.target as { profileHash: string }).profileHash, attemptId);
+                            journal.update({ prerequisites: receipts });
+                        }, journal).deploy(s, this.signal);
+                    s.deployUncertain = false;
+                    this.saveProject(s);
+                    journal.update({ status: 'succeeded' });
+                    return { commit: s.mergeSha, release: s.deployRelease };
+                } catch (error) {
+                    const prerequisites = this.store.all<import('./async-store.js').Operation>('operation').filter(op => {
+                        const input = op.input as any;
+                        return op.conversationId === this.conversation.id && input?.project === s.repo && input.authorization?.deployRequestId === a.requestId && input.authorization?.attemptId === attemptId;
+                    }).flatMap(op => { const result = ReceiptSchema.safeParse(op.result); return result.success ? [result.data] : []; });
+                    journal.update({ prerequisites }); journal.failed(error);
+                    throw error;
+                } finally { journal.close(); }
             });
             return kind === 'deploy' ? withProjectOperationLock(this.config, target.project, async () => {
                 new OperationsAdapter(this.config, this.store, this.conversation.id).assertNoUncertainWrites(target.project, this.conversation.id + ':deploy:' + a.requestId);
@@ -462,5 +497,26 @@ export class AsyncTools {
             return { verified: false, operatorReset: true, replayed: false };
         }
         return { verified: false, uncertain: true };
+    }
+    async resolveFailed(operationId: string, raw: unknown) {
+        const evidence = FailedResolutionSchema.parse(raw), op = this.store.get<import('./async-store.js').Operation>('operation', operationId);
+        if (!op || op.conversationId !== this.conversation.id || !op.key.startsWith('deploy:')) throw Error('DEPLOY_OPERATION_REQUIRED');
+        if (evidence.operationId !== op.id || evidence.project !== (op.input as any)?.project || evidence.fingerprint !== (op.input as any)?.profileHash) throw Error('RESOLUTION_TARGET_MISMATCH');
+        if (op.status === 'done') {
+            const audit = this.store.get('failed-resolution', op.id);
+            if (digest(audit) !== digest(evidence)) throw Error('RESOLUTION_ALREADY_RECORDED');
+            return op.result;
+        }
+        return withProjectOperationLock(this.config, evidence.project, async () => this.store.transaction(() => {
+            this.store.put('operation-audit', op.id + ':before-failed-resolution', op);
+            this.store.put('failed-resolution', op.id, evidence);
+            op.status = 'done';
+            op.result = { ok: false, outcome: 'confirmed-failed', summary: evidence.summary, evidence: evidence.evidence, effects: evidence.effects, inspectedAt: evidence.inspectedAt };
+            if (op.report) op.report.status = 'confirmed-failed';
+            this.store.put('operation', op.id, op);
+            const s = this.session(this.config.repositories[evidence.project].path);
+            s.deployUncertain = false; this.saveProject(s);
+            return op.result;
+        }));
     }
 }
