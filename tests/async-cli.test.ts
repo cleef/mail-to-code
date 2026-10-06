@@ -15,6 +15,7 @@ import type { MailTransport } from '../src/delivery.js';
 import { git } from '../src/git.js';
 import { markdownHtml } from '../src/mail-markdown.js';
 import { Runner, codexPolicy } from '../src/runner.js';
+import { FinalMail } from '../src/final-mail.js';
 const incoming = (id: string, text = 'Implement the scoped feature'): Incoming => ({ id, threadId: 'gmail-1', rfcId: `<${id}@example.test>`, inReplyTo: '', subject: 'Synthetic feature', text, from: 'owner@example.test', trusted: true });
 class FakeClient extends EventEmitter implements Client {
     calls: {
@@ -24,6 +25,7 @@ class FakeClient extends EventEmitter implements Client {
     closed = false;
     loseAck = false;
     loseHistory = false;
+    finalReply?: string;
     constructor(readonly history: {
         thread: any;
     }, readonly complete = false) { super(); }
@@ -42,6 +44,7 @@ class FakeClient extends EventEmitter implements Client {
         if (method === 'turn/start') {
             const turn = { id: 'turn-' + this.history.thread.turns.length, status: this.complete ? 'completed' : 'inProgress', items: [{ type: 'userMessage', content: params.input }] };
             this.history.thread.turns.push(turn);
+            if (this.complete && this.finalReply) (turn.items as any[]).push({ id: 'reply-' + turn.id, type: 'agentMessage', phase: 'final_answer', text: this.finalReply });
             if (this.complete)
                 queueMicrotask(() => this.emit('notification', 'turn/completed', { threadId: this.history.thread.id, turn }));
             if (this.loseAck) {
@@ -53,12 +56,12 @@ class FakeClient extends EventEmitter implements Client {
         throw Error('Unexpected method ' + method);
     }
 }
-async function fixture(complete = false) {
-    const root = await mkdtemp(join(tmpdir(), 'async-test-')), config = ConfigSchema.parse({ gmailAddress: 'agent@example.test', ownerAddress: 'owner@example.test', dataDir: root, projectsRoot: join(root, 'projects') });
+async function fixture(complete = false, finalMode = false) {
+    const root = await mkdtemp(join(tmpdir(), 'async-test-')), config = ConfigSchema.parse({ ...(finalMode ? { engine: 'async-cli', asyncMailOutput: 'assistant-final' } : {}), gmailAddress: 'agent@example.test', ownerAddress: 'owner@example.test', dataDir: root, projectsRoot: join(root, 'projects') });
     await mkdir(config.projectsRoot);
     const store = new AsyncStore(join(root, 'async-cli.sqlite')), history = { thread: { id: 'codex-thread', turns: [] as any[] } }, clients: FakeClient[] = [], sends: any[] = [];
     const mail: MailTransport = { profile: async () => ({ emailAddress: config.gmailAddress, historyId: 'cursor' }), history: async () => ({ messages: [], cursor: 'cursor' }), search: async () => [], read: async () => { throw Error('Unavailable'); }, send: async (input) => { sends.push(input); return { id: 'sent', threadId: 'gmail-1' }; } };
-    const bridge = new AsyncBridge(config, store, mail, async () => { const c = new FakeClient(history, complete); clients.push(c); return c; });
+    const bridge = new AsyncBridge(config, store, mail, async () => { const c = new FakeClient(history, complete); if (finalMode) c.finalReply = '已完成修改，检查通过。可以查看 PR。'; clients.push(c); return c; }, undefined, root);
     return { root, config, store, history, clients, sends, mail, bridge };
 }
 test('configuration keeps legacy installations unchanged and defaults to projects root', () => { const c = ConfigSchema.parse({ gmailAddress: 'agent@example.test', ownerAddress: 'owner@example.test' }); assert.equal(c.engine, 'legacy'); assert.equal(c.projectsRoot, '~/projects'); });
@@ -270,7 +273,7 @@ test('old state imports read-only and paused without restoring approval or repla
 test('native interactive requests decline permissions and never fabricate a human answer', () => {
     assert.deepEqual(denyInteractive({ id: 1, method: 'item/commandExecution/requestApproval', params: {} }), { decision: 'decline' });
     assert.deepEqual(denyInteractive({ id: 2, method: 'item/permissions/requestApproval', params: {} }), { permissions: {}, scope: 'turn' });
-    assert.throws(() => denyInteractive({ id: 3, method: 'item/tool/requestUserInput', params: {} }), /queue_mail/);
+    assert.throws(() => denyInteractive({ id: 3, method: 'item/tool/requestUserInput', params: {} }), /ASYNCHRONOUS_CLIENT/);
 });
 test('runtime scheduler caps active primary conversations and an inspection exception does not occupy a slot', async () => {
     const f = await fixture(), clients: FakeClient[] = [];
@@ -508,4 +511,135 @@ test('actual stdio protocol initializes, handles dynamic server requests and clo
     assert.equal((await actual.request('probe', {})).success, true);
     await actual.close();
     await actual.close();
+});
+
+test('assistant-final forwards native wording once, skips historical turns and keeps delivery immutable', async () => {
+    const f = await fixture(true, true);
+    f.history.thread.turns.push({ id: 'historical', status: 'completed', items: [{ id: 'old-answer', type: 'agentMessage', phase: 'final_answer', text: 'Old answer must not be sent.' }] });
+    const c = f.store.intake(incoming('final-one'), 'raw', 'body');
+    await f.bridge.dispatch(c);
+    assert.equal(f.store.mails().length, 1);
+    const outbound = f.store.mails()[0];
+    assert.equal(outbound.text, '已完成修改，检查通过。可以查看 PR。');
+    new FinalMail(f.store).complete(c, f.history.thread.turns.at(-1));
+    assert.equal(f.store.mails().length, 1);
+    await f.bridge.stop();
+    const restarted = new AsyncBridge(f.config, f.store, f.mail, f.bridge.factory, undefined, f.root);
+    await restarted.dispatch(f.store.conversation(c.id)!);
+    assert.equal(f.store.mails().length, 1);
+    assert.equal(f.store.mail(outbound.id)!.text, outbound.text);
+    await restarted.stop(); f.store.close();
+});
+
+test('streamed commentary is internal; multiple steered inputs get one completed native final', async () => {
+    const f = await fixture(false, true), first = incoming('steer-one'), c = f.store.intake(first, 'raw', 'body');
+    await f.bridge.dispatch(c);
+    const client = f.clients[0], turn = f.history.thread.turns[0];
+    client.emit('notification', 'item/completed', { threadId: c.codexThread, turnId: turn.id, item: { id: 'progress', type: 'agentMessage', phase: 'commentary', text: 'Internal progress' } });
+    f.store.intake({ ...incoming('steer-two', '补充：保留原布局'), inReplyTo: first.rfcId }, 'raw', 'body');
+    await f.bridge.dispatch(f.store.conversation(c.id)!);
+    assert.equal(f.store.mails().length, 0);
+    turn.status = 'completed'; turn.items = [];
+    client.emit('notification', 'item/completed', { threadId: c.codexThread, turnId: turn.id, item: { id: 'answer', type: 'agentMessage', phase: 'final_answer', text: '已保留原布局并完成修改。' } });
+    client.emit('notification', 'turn/completed', { threadId: c.codexThread, turn });
+    assert.equal(f.store.mails().length, 1);
+    assert.equal(f.store.mails()[0].text, '已保留原布局并完成修改。');
+    assert.equal(client.calls.filter(x => x.method === 'turn/start').length, 1);
+    assert.equal(client.calls.filter(x => x.method === 'turn/steer').length, 1);
+    await f.bridge.stop(); f.store.close();
+});
+
+test('lost final-turn acknowledgement recovers its original reply without executing another turn', async () => {
+    const f = await fixture(true, true), c = f.store.intake(incoming('lost-final'), '', 'body');
+    const lost = new FakeClient(f.history, true); lost.loseAck = true; lost.finalReply = '原会话已完成。';
+    const bridge = new AsyncBridge(f.config, f.store, f.mail, async () => lost, undefined, f.root);
+    await assert.rejects(bridge.dispatch(c), /ACK_UNCERTAIN/); await bridge.stop();
+    const resumed = new AsyncBridge(f.config, f.store, f.mail, f.bridge.factory, undefined, f.root);
+    await resumed.dispatch(f.store.conversation(c.id)!);
+    assert.equal(f.history.thread.turns.length, 1);
+    assert.equal(f.store.mails().length, 1);
+    assert.equal(f.store.mails()[0].text, '原会话已完成。');
+    await resumed.stop(); f.store.close();
+});
+
+test('old queue_mail prepares the final confirmation binding, never a second notification', async () => {
+    const f = await fixture(false, true), path = join(f.config.projectsRoot, 'sample');
+    await mkdir(path); await git(path, ['init', '-b', 'main']); await git(path, ['remote', 'add', 'origin', 'https://github.com/example-org/sample.git']);
+    const c = f.store.intake(incoming('confirm-one'), '', 'body'); await f.bridge.dispatch(c);
+    const turn = f.history.thread.turns[0], current = f.store.conversation(c.id)!;
+    const tools = new AsyncTools(f.config, f.store, current, new AbortController().signal, turn.id);
+    const request = { kind: 'scope', projects: [{ path: 'sample', role: 'modify' }] };
+    const prepared: any = await tools.call(current.codexThread!, 'request_confirmation', { key: 'scope-request', request });
+    const compat: any = await tools.call(current.codexThread!, 'queue_mail', { key: 'compat-request', text: 'Separate notification must not be sent', request });
+    assert.equal(prepared.requestId, compat.requestId); assert.equal(f.store.mails().length, 0);
+    assert.throws(() => f.store.authorize(c.id, prepared.requestId, 'confirm-one', 'Implement the scoped feature'), /REPLY_BINDING/);
+    turn.status = 'completed'; turn.items.push({ id: 'request-answer', type: 'agentMessage', phase: 'final_answer', text: '需要增加 Sample 项目的修改范围，请确认。' });
+    f.clients[0].emit('notification', 'turn/completed', { threadId: current.codexThread, turn });
+    const m = f.store.mails()[0]; assert.equal(f.store.mails().length, 1); assert.equal(m.text, '需要增加 Sample 项目的修改范围，请确认。');
+    m.identityStatus = 'verified'; m.rfcMessageId = '<request@example.test>'; f.store.saveMail(m);
+    const reply = { ...incoming('confirm-two', '确认按这个方案修改 Sample。'), inReplyTo: m.rfcMessageId };
+    f.store.intake(reply, '', reply.text);
+    assert.equal(f.store.authorize(c.id, prepared.requestId, reply.id, reply.text).mailId, m.id);
+    await assert.rejects(tools.call(current.codexThread!, 'request_confirmation', { key: 'different', request: { ...request, projects: [{ path: 'sample', role: 'reference' }] } }), /TARGET_CHANGED/);
+    await f.bridge.stop(); f.store.close();
+});
+
+test('production guide-loading path excludes legacy START workflow and refreshes resumed-turn transport', async () => {
+    const f = await fixture(false, true);
+    await writeFile(join(f.root, 'AGENTS.md'), 'Legacy-only START policy', { mode: 0o600 });
+    await writeFile(join(f.root, 'WORKFLOW.md'), 'Legacy-only Review policy', { mode: 0o600 });
+    await writeFile(join(f.root, 'ASYNC_AGENTS.md'), 'Write concise natural replies. Preserve synthetic product convention.', { mode: 0o600 });
+    const c = f.store.intake(incoming('guide-one'), '', 'body'); await f.bridge.dispatch(c);
+    const options = f.clients[0].calls.find(x => x.method === 'thread/start')!.params;
+    assert.match(options.developerInstructions, /Preserve synthetic product convention/);
+    assert.ok(!options.developerInstructions.includes('Legacy-only'));
+    assert.ok(!options.developerInstructions.includes('A final assistant message stays internal'));
+    const input = f.clients[0].calls.find(x => x.method === 'turn/start')!.params.input[0].text;
+    assert.match(input, /Current controller transport: assistant-final/);
+    assert.match(input, /Explicit natural-language confirmation/);
+    await f.bridge.stop(); f.store.close();
+});
+
+test('final selection supports terminal legacy messages and native plans, excludes failed turns', async () => {
+    const f = await fixture(false, true), c = f.store.intake(incoming('selection'), '', 'body'); await f.bridge.dispatch(c);
+    const final = new FinalMail(f.store), id = f.history.thread.turns[0].id;
+    final.complete(c, { id, status: 'failed', items: [{ id: 'partial', type: 'agentMessage', phase: 'final_answer', text: 'Partial must not be delivered' }] });
+    assert.equal(f.store.mails().length, 0);
+    final.complete(c, { id, status: 'completed', items: [{ id: 'legacy-reply', type: 'agentMessage', text: 'Older native final wording' }] });
+    assert.equal(f.store.mails()[0].text, 'Older native final wording');
+    f.store.put('final-turn', c.id + ':plan-turn', { rootTurn: 'plan-turn' });
+    final.complete(c, { id: 'plan-turn', status: 'completed', items: [{ id: 'plan', type: 'plan', text: 'Native proposed plan' }] });
+    assert.equal(f.store.mails()[1].text, 'Native proposed plan');
+    await f.bridge.stop(); f.store.close();
+});
+
+test('restart fills a completed native reply after local turn bookkeeping without starting work again', async () => {
+    const f = await fixture(false, true), c = f.store.intake(incoming('crash-final'), '', 'body');
+    await f.bridge.dispatch(c);
+    const turn = f.history.thread.turns[0];
+    turn.status = 'completed'; turn.items.push({ id: 'crash-reply', type: 'agentMessage', phase: 'final_answer', text: '已完成，恢复后发送原答复。' });
+    const current = f.store.conversation(c.id)!; current.activeTurn = undefined; f.store.save(current);
+    await f.bridge.stop();
+    assert.equal(new FinalMail(f.store).pending(current).length, 1);
+    const resumed = new AsyncBridge(f.config, f.store, f.mail, f.bridge.factory, undefined, f.root);
+    await resumed.dispatch(current);
+    assert.equal(f.history.thread.turns.length, 1);
+    assert.equal(f.store.mails()[0].text, '已完成，恢复后发送原答复。');
+    await resumed.stop(); f.store.close();
+});
+
+test('continuation preserves the prepared confirmation and commits one root-turn reply atomically', async () => {
+    const f = await fixture(false, true), c = f.store.intake(incoming('continued'), '', 'body');
+    await f.bridge.dispatch(c);
+    const root = f.history.thread.turns[0].id, final = new FinalMail(f.store);
+    final.continuation(c, root, 'continued-turn');
+    const prepared = f.store.prepareConfirmation(c, 'continued-turn', 'scope-key', { kind: 'scope', target: { projects: [{ path: f.config.projectsRoot, role: 'modify', identity: 'example-org/sample' }] } });
+    const turn = { id: 'continued-turn', status: 'completed', items: [{ id: 'continued-answer', type: 'agentMessage', phase: 'final_answer', text: '请确认增加项目修改范围。' }] };
+    assert.throws(() => f.store.transaction(() => { final.complete(c, turn); throw Error('synthetic crash before commit'); }), /synthetic crash/);
+    assert.equal(f.store.mails().length, 0);
+    final.complete(c, turn); final.complete(c, turn);
+    assert.equal(f.store.mails().length, 1);
+    assert.equal(f.store.get<any>('request', prepared.id).mailId, f.store.mails()[0].id);
+    assert.equal(final.pending(c).length, 0);
+    await f.bridge.stop(); f.store.close();
 });

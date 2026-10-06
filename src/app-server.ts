@@ -117,5 +117,5 @@ export function denyInteractive(r: ServerRequest) {
     if (r.method === 'item/permissions/requestApproval')
         return { permissions: {}, scope: 'turn' };
     // An unanswered request is a tool error, never a fabricated user answer or approval.
-    throw Error('ASYNCHRONOUS_CLIENT: use queue_mail for human input, preserve the draft, and finish the turn.');
+    throw Error('ASYNCHRONOUS_CLIENT: prepare any required confirmation through the configured mail tools, preserve the draft, write the user-facing reply and finish the turn.');
 }

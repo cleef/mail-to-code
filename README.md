@@ -2,7 +2,7 @@
 
 Self-hosted, email-driven coding with Codex, human review, and approval-controlled deployment.
 
-Describe a task by email. MailToCode identifies the relevant repositories, discusses a plan, runs Codex in isolated worktrees, independently checks the changes, and replies with a Review. Merge and deployment require separate approval of the current version.
+Describe a task by email. The asynchronous engine passes it to a persistent Codex CLI conversation and returns Codex's final reply in the same mail thread. Codex discovers repositories, discusses choices and works in approved isolated worktrees. Merge and deployment require separate approval of the exact current target.
 
 ## Workflow
 

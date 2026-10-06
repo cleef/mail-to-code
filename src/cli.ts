@@ -1,6 +1,6 @@
 import { join } from 'node:path';
-import { writeFile,stat } from 'node:fs/promises';
-import { configDir, loadConfig, privateDir, type Config } from './config.js';
+import { writeFile,stat,lstat } from 'node:fs/promises';
+import { configDir, loadConfig, privateDir, privateFile, type Config } from './config.js';
 import { GmailClient } from './gmail.js';
 import { authorize } from './oauth.js';
 import { Store } from './store.js';
@@ -40,14 +40,15 @@ async function doctor(config:Config) {
   console.log(JSON.stringify({checks,...stats},null,2));return checks.every(c=>c.ok);
 }
 async function main(){
+  if(command==='async-agent-guide'){if(process.argv[3]==='init')console.log(JSON.stringify(await initializeAgentGuide(undefined,true)));else if(!process.argv[3]){await readAgentGuide(undefined,true);console.log(join(configDir(),'ASYNC_AGENTS.md'));}else throw Error('async-agent-guide [init]');return;}
   if(command==='workflow-guide'){if(process.argv[3]==='init')console.log(JSON.stringify(await initializeWorkflowGuide()));else if(!process.argv[3])console.log(JSON.stringify({version:(await readWorkflowGuide()).version}));else throw Error('workflow-guide [init]');return;}
   if(command==='agent-guide'){if(process.argv[3]==='init')console.log(JSON.stringify(await initializeAgentGuide()));else if(!process.argv[3]){await readAgentGuide();console.log(agentGuidePath());}else throw new Error('agent-guide [init]');return;}
   if(command==='init'){
     const args=process.argv.slice(3),value=(key:string)=>args[args.indexOf(key)+1];
     if(!args.includes('--gmail')||!args.includes('--owner'))throw new Error('init --gmail agent@gmail.com --owner owner@qq.com');
     await privateDir(configDir());const path=join(configDir(),'config.json');
-    const config={gmailAddress:value('--gmail'),ownerAddress:value('--owner'),dataDir:'~/.local/share/mail-to-code',codexCommand:'codex',githubTokenFile:'~/.config/mail-to-code/github-token',projectsRoot:'~/projects',repositories:{},profiles:{}};
-    await writeFile(path,JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});await initializeAgentGuide();await initializeWorkflowGuide();console.log(`Created ${path}; add Desktop OAuth client and authorize.`);return;
+    const config={engine:'async-cli',asyncMailOutput:'assistant-final',gmailAddress:value('--gmail'),ownerAddress:value('--owner'),dataDir:'~/.local/share/mail-to-code',codexCommand:'codex',githubTokenFile:'~/.config/mail-to-code/github-token',projectsRoot:'~/projects',repositories:{},profiles:{}};
+    await writeFile(path,JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});await initializeAgentGuide();await initializeAgentGuide(undefined,true);await initializeWorkflowGuide();console.log(`Created ${path}; add Desktop OAuth client and authorize.`);return;
   }
   const config=await loadConfig();await privateDir(config.dataDir);
   if(command==='auth'){await authorize(config);return;}
@@ -55,11 +56,19 @@ async function main(){
     await (await import('./async-cli.js')).serveAsync(config);return;
   }
   if(command==='async-doctor'||command==='doctor'&&config.engine==='async-cli'){const result=await(await import('./async-cli.js')).doctorAsync(config);console.log(JSON.stringify(result,null,2));if(!result.ok)process.exitCode=2;return;}
-  if(command==='async-status'||command==='async-import'||command==='async-adopt'||command==='async-reconcile'||command==='async-reconcile-input'||command==='async-reconcile-send'){
+  if(command==='async-status'||command==='async-import'||command==='async-adopt'||command==='async-reconcile'||command==='async-resolve-failed'||command==='async-reconcile-input'||command==='async-reconcile-send'){
     const {AsyncStore}=await import('./async-store.js'),{importLegacy}=await import('./async-cli.js');
     const release=command==='async-status'?async()=>{}:await acquireLease(config.dataDir),asyncStore=new AsyncStore(join(config.dataDir,'async-cli.sqlite'),command==='async-status');
     try{
       if(command==='async-reconcile-input'){if(!process.argv.includes('--verified-not-accepted'))throw Error('Inspect native thread history and effects first: async-reconcile-input <input-id> --verified-not-accepted');console.log(JSON.stringify(asyncStore.requeueInput(process.argv[3])));}
+      else if(command==='async-resolve-failed'){
+        const c=asyncStore.conversation(process.argv[3]), index=process.argv.indexOf('--evidence-file'), path=index>=0?process.argv[index+1]:undefined;
+        if(!c||!process.argv[4]||!path)throw Error('async-resolve-failed <feature-id> <operation-id> --evidence-file <private-json>: inspect all effects and confirm none remain in flight first');
+        const info=await lstat(path);if(!info.isFile()||info.isSymbolicLink())throw Error('RESOLUTION_EVIDENCE_REGULAR_FILE_REQUIRED');
+        await privateFile(path);if(info.size>65536)throw Error('RESOLUTION_EVIDENCE_TOO_LARGE');
+        const {readFile}=await import('node:fs/promises'),{AsyncTools}=await import('./async-tools.js');
+        console.log(JSON.stringify(await new AsyncTools(config,asyncStore,c,new AbortController().signal).resolveFailed(process.argv[4],JSON.parse(await readFile(path,'utf8')))));
+      }
       else if(command==='async-reconcile-send'){const {AsyncBridge}=await import('./async-cli.js'),gmail=await GmailClient.create(config);await gmail.verify();console.log(JSON.stringify(await new AsyncBridge(config,asyncStore,gmail).reconcileSend(process.argv[3],process.argv.includes('--verified-absent'))));}
       else if(command==='async-reconcile'){const c=asyncStore.conversation(process.argv[3]);if(!c||!process.argv[4])throw Error('async-reconcile <feature-id> <operation-id> [--verified-no-effect]');const {AsyncTools}=await import('./async-tools.js');console.log(JSON.stringify(await new AsyncTools(config,asyncStore,c,new AbortController().signal).reconcile(process.argv[4],process.argv.includes('--verified-no-effect'))));}
       else if(command==='async-adopt'){const c=asyncStore.conversation(process.argv[3]);if(!c?.paused||!process.argv.includes('--verified-runtime'))throw Error('async-adopt <id> --verified-runtime: first inspect actual versions, worktrees and uncertain operations; old approvals are never restored');c.paused=false;asyncStore.save(c);console.log(JSON.stringify({id:c.id,adopted:true,replayed:0,restoredGrants:0}));}

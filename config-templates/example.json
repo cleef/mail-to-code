@@ -1,4 +1,6 @@
 {
+  "engine": "async-cli",
+  "asyncMailOutput": "assistant-final",
   "gmailAddress": "agent@gmail.com",
   "ownerAddress": "owner@example.com",
   "dataDir": "~/.local/share/mail-to-code",

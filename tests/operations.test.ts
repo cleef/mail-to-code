@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, chmod, realpath, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, chmod, realpath, symlink, stat, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConfigSchema } from '../src/config.js';
@@ -11,9 +11,30 @@ import { asyncPolicy, ASYNC_CONTRACT } from '../src/async-cli.js';
 import { DeployAdapter } from '../src/deploy.js';
 import { git, type GitAdapter } from '../src/git.js';
 import type { Session, Incoming } from '../src/types.js';
+import { OperationJournal, operationStatus } from '../src/operation-report.js';
 
 const signal = () => new AbortController().signal;
 const mail = (id: string, text: string): Incoming => ({ id, text, threadId: 'gmail', rfcId: `<${id}@example.test>`, inReplyTo: '', subject: 'Synthetic operations', from: 'owner@example.test', trusted: true });
+
+test('fragmented stage output preserves private logs and excludes malformed or sensitive diagnostics', async () => {
+    const f = await fixture(), id = f.c.id + ':deploy:journal';
+    f.store.put('operation', id, { id, conversationId: f.c.id, key: 'deploy:journal', input: { project: 'sample' }, status: 'running' });
+    const journal = new OperationJournal(f.config, f.store, id);
+    journal.onStdout('MAIL_TO_CODE_EVENT {"stage":"migr');
+    journal.onStdout('ation","status":"started"}\nMAIL_TO_CODE_EVENT {"stage":"bad","status":"failed","password":"synthetic-secret"}\n');
+    journal.onStderr('synthetic credential must stay in private log\n');
+    journal.failed(Error('unsafe error containing synthetic credential')); journal.close();
+    const status = operationStatus(f.store, f.c.id, 'sample');
+    assert.equal(status[0].report?.stage, 'migration');
+    assert.equal(status[0].report?.error, 'OPERATION_FAILED');
+    assert.equal(status[0].report?.events.length, 1);
+    assert.ok(!JSON.stringify(status).includes('synthetic'));
+    const logs = join(f.config.dataDir, 'effect-logs'), directory = join(logs, (await readdir(logs))[0]);
+    assert.equal((await stat(directory)).mode & 0o777, 0o700);
+    assert.equal((await stat(join(directory, 'stderr.log'))).mode & 0o777, 0o600);
+    assert.match(await readFile(join(directory, 'stderr.log'), 'utf8'), /synthetic credential/);
+    f.store.close();
+});
 async function fixture() {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'controlled-operations-')));
     const projects = join(root, 'projects'), privateDirectory = join(root, 'private'), data = join(root, 'data');
@@ -271,4 +292,79 @@ test('current operation context exposes only approved capabilities and invalidat
     assert.match(unapproved, /mail-to-code-operation/); assert.match(unapproved, /"projects":\[\]/);
     assert.ok(!unapproved.includes('sample-staging')); assert.ok(!unapproved.includes('other-staging'));
     await assert.rejects(f.call('project_operations', {}), /WRITABLE_SCOPE_REQUIRED/); f.store.close();
+});
+
+test('operation status returns safe receipts across projects and never raw process logs', async () => {
+    const f = await fixture();
+    await f.call('project_operation', { operation: 'inspect', key: 'known' });
+    await writeFile(f.script, `#!${process.execPath}\nconsole.log('password=synthetic-raw-log');console.error('credential detail');process.exit(1);\n`);
+    await assert.rejects(f.call('project_operation', { operation: 'inspect', key: 'failed' }), /UNCERTAIN/);
+    const result: any = await f.call('project_operation_status', {});
+    assert.equal(result.length, 2); assert.equal(result[0].result.ok, true); assert.equal(result[1].status, 'uncertain');
+    assert.equal(result[1].report.status, 'uncertain');
+    assert.ok(!JSON.stringify(result).includes('synthetic-raw-log')); assert.ok(!JSON.stringify(result).includes('credential detail'));
+    assert.deepEqual(await f.call('project_operation_status', { project: 'other' }), []);
+    assert.deepEqual(await f.call('project_command', { executable: 'mail-to-code-operation', args: ['status', '{}'] }), result);
+    assert.deepEqual(await f.call('project_operation_status', { operationId: result[0].operationId }), [result[0]]);
+    f.store.close();
+});
+
+test('deployment failure preserves completed backup and phase evidence, resolution preserves partial effects and cannot replay', async () => {
+    const f = await fixture(), repo = f.config.repositories.sample;
+    repo.deployment = { enabled: true, host: 'operator@server.example.test', domain: 'app.example.test', remoteBase: '/srv/app', script: 'deploy.sh', adapter: 'script', args: [], healthPaths: ['/'], preDeployOperations: ['backup'] };
+    f.config.profiles.sample = { kind: 'generic', runtime: ['node'], install: [], build: [], checks: [], preview: { kind: 'none', mounts: [], paths: ['/'] }, services: [], generatedFiles: [], pendingChecks: [], packageSources: ['registry.npmjs.org'] };
+    f.tools.config.profiles.sample = f.config.profiles.sample;
+    const session = { id: 'synthetic-release', repo: 'sample', worktree: repo.path, mergeSha: 'a'.repeat(40), deployUncertain: true };
+    f.store.put('project', f.c.id + ':' + repo.path, session);
+    const request: any = await f.tools.call('primary', 'queue_mail', { key: 'failed-deploy-request', text: 'Deploy the reviewed version with backup.', request: { kind: 'deploy', project: 'sample' } });
+    const m = f.store.mail(request.mailId)!; m.identityStatus = 'verified'; m.rfcMessageId = '<failed-deploy@example.test>'; f.store.saveMail(m);
+    const reply = { ...mail('confirmed-natural', '确认按这个方案发布，先备份。'), inReplyTo: m.rfcMessageId }; f.store.intake(reply, '', reply.text);
+    await f.tools.call('primary', 'record_authorization', { requestId: request.requestId, sourceMailId: reply.id, evidence: reply.text });
+    const original = DeployAdapter.prototype.deploy; let effects = 0;
+    DeployAdapter.prototype.deploy = async function (_session, signal) {
+        await this.preDeploy!(signal); effects++;
+        this.journal!.onStdout('MAIL_TO_CODE_EVENT {"stage":"migration","status":"completed"}\nMAIL_TO_CODE_EVENT {"stage":"worker","status":"started"}\n');
+        this.journal!.onStderr('password=synthetic-private-log\n');
+        throw Object.assign(Error('PROCESS_FAILED:bash:1'), { stderr: 'raw secret detail' });
+    };
+    try {
+        await assert.rejects(f.tools.call('primary', 'project_deploy', { requestId: request.requestId }), /PROCESS_FAILED/);
+        const statuses: any = await f.call('project_operation_status', {}), deployment = statuses.find((s: any) => s.kind === 'deploy');
+        assert.equal(deployment.report.stage, 'worker'); assert.equal(deployment.report.prerequisites.length, 1);
+        assert.equal(deployment.report.prerequisites[0].ok, true); assert.equal(deployment.report.events[0].stage, 'migration');
+        assert.ok(!JSON.stringify(statuses).includes('synthetic-private-log'));
+        await assert.rejects(f.tools.call('primary', 'project_deploy', { requestId: request.requestId }), /UNCERTAIN_RECONCILE/);
+        assert.equal(effects, 1);
+        const evidence = { operationId: deployment.operationId, project: 'sample', fingerprint: deployment.fingerprint, summary: 'Migration applied; app rolled back; worker independently recovered.', inspectedAt: new Date().toISOString(), effects: 'partial', noEffectInFlight: true, evidence: { migrationApplied: true, applicationRolledBack: true, workerHealthy: true } };
+        await assert.rejects(f.tools.resolveFailed(deployment.operationId, { ...evidence, fingerprint: '0'.repeat(64) }), /TARGET_MISMATCH/);
+        const resolution: any = await f.tools.resolveFailed(deployment.operationId, evidence);
+        assert.equal(resolution.ok, false); assert.equal(resolution.effects, 'partial');
+        assert.deepEqual(await f.tools.resolveFailed(deployment.operationId, evidence), resolution);
+        assert.deepEqual(await f.tools.call('primary', 'project_deploy', { requestId: request.requestId }), resolution);
+        repo.deployment.trustedScriptSha = 'b'.repeat(40);
+        assert.deepEqual(await f.tools.call('primary', 'project_deploy', { requestId: request.requestId }), resolution);
+        assert.equal(effects, 1); assert.equal(await readFile(f.trace, 'utf8'), 'call\n');
+        assert.equal(f.store.get<any>('project', f.c.id + ':' + repo.path).deployUncertain, false);
+        assert.equal(f.store.get<any>('operation-audit', deployment.operationId + ':before-failed-resolution').status, 'uncertain');
+        await assert.rejects(f.tools.resolveFailed(deployment.operationId, { ...evidence, summary: 'Different resolution' }), /ALREADY_RECORDED/);
+    } finally { DeployAdapter.prototype.deploy = original; f.store.close(); }
+});
+
+test('new reviewed deploy baseline is explicit, fingerprint-bound, and still rejects unreviewed scripts', async () => {
+    const f = await fixture(), repo = f.config.repositories.sample;
+    await writeFile(join(repo.path, 'deploy.sh'), '#!/bin/sh\nexit 0\n'); await git(repo.path, ['add', '.']);
+    await git(repo.path, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Synthetic original']);
+    const oldSha = await git(repo.path, ['rev-parse', 'HEAD']);
+    await writeFile(join(repo.path, 'deploy.sh'), '#!/bin/sh\n# Reviewed fix\nexit 0\n'); await git(repo.path, ['add', '.']);
+    await git(repo.path, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Reviewed fixture fix']);
+    const sha = await git(repo.path, ['rev-parse', 'HEAD']);
+    repo.deployment = { enabled: true, host: 'operator@server.example.test', domain: 'app.example.test', remoteBase: '/srv/app', script: 'deploy.sh', adapter: 'script', args: [], healthPaths: ['/'] };
+    const session = { id: 'fixture', repo: 'sample', baseSha: oldSha, mergeSha: sha } as Session;
+    const adapter = new DeployAdapter(f.config, { cleanDeploy: async () => repo.path } as unknown as GitAdapter, undefined, async () => {}, async () => { throw Error('PREDEPLOY_TEST_STOP'); });
+    await assert.rejects(adapter.deploy(session, signal()), /trusted baseline/);
+    const before = await f.adapter.deployFingerprint('sample'); repo.deployment.trustedScriptSha = sha;
+    assert.notEqual(await f.adapter.deployFingerprint('sample'), before);
+    await assert.rejects(adapter.deploy(session, signal()), /PREDEPLOY_TEST_STOP/);
+    await writeFile(join(repo.path, 'deploy.sh'), '#!/bin/sh\n# Unreviewed edit\n');
+    await assert.rejects(adapter.deploy(session, signal()), /approved source commit/); f.store.close();
 });

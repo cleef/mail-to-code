@@ -12,6 +12,7 @@ git switch --detach "$task_ref"
 npm ci
 npm test
 node dist/src/cli.js agent-guide init
+node dist/src/cli.js async-agent-guide init
 node dist/src/cli.js workflow-guide init
 node dist/src/cli.js migrate
 node dist/src/cli.js mail-links backfill

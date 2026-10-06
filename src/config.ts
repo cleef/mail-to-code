@@ -11,10 +11,11 @@ const repository = z.object({
   path: z.string(), github: z.string().regex(/^[\w.-]+\/[\w.-]+$/), baseBranch: z.string().default('main'),
   mergeMethod:z.enum(['merge','squash','rebase']).default('merge'), productDocs: z.string().optional(), checks: z.array(command).default([]),
   operations: z.record(OperationIdSchema, OperationSchema).optional(),
-  deployment: z.object({ host: z.string().regex(/^[\w.@-]+$/), domain: z.string().regex(/^[\w.-]+$/), remoteBase: z.string().regex(/^\/[\w./-]+$/), script:z.string().regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[\w./-]+$/).default('scripts/deploy.sh'), adapter:z.literal('script').default('script'), args:z.array(z.string()).default([]), healthPaths:z.array(z.string().regex(/^\/(?!\/)/)).default(['/']), enabled: z.boolean().default(false), preDeployOperations: z.array(OperationIdSchema).max(20).optional() }).strict().optional()
+  deployment: z.object({ trustedScriptSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), host: z.string().regex(/^[\w.@-]+$/), domain: z.string().regex(/^[\w.-]+$/), remoteBase: z.string().regex(/^\/[\w./-]+$/), script:z.string().regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[\w./-]+$/).default('scripts/deploy.sh'), adapter:z.literal('script').default('script'), args:z.array(z.string()).default([]), healthPaths:z.array(z.string().regex(/^\/(?!\/)/)).default(['/']), enabled: z.boolean().default(false), preDeployOperations: z.array(OperationIdSchema).max(20).optional() }).strict().optional()
 }).strict();
 export const ConfigSchema = z.object({
   engine:z.enum(['legacy','async-cli']).default('legacy'),
+  asyncMailOutput:z.enum(['queue-mail','assistant-final']).default('queue-mail'),
   gmailAddress: z.string().email(), ownerAddress: z.string().email(),
   dataDir: z.string().default('~/.local/share/mail-to-code'), codexCommand: z.string().default('codex'),
   pollSeconds: z.number().int().min(10).default(60), timeoutSeconds: z.number().int().min(30).default(3600),
@@ -25,6 +26,7 @@ export const ConfigSchema = z.object({
   screenshotImage: z.string().default('localhost/mail-to-code-preview:1.63.0'),
   previewEnabled: z.boolean().default(true)
 }).strict().superRefine((config, ctx) => {
+  if (config.engine !== 'async-cli' && config.asyncMailOutput === 'assistant-final') ctx.addIssue({ code: 'custom', path: ['asyncMailOutput'], message: 'ASSISTANT_FINAL_REQUIRES_ASYNC_CLI' });
   for (const [name, repo] of Object.entries(config.repositories)) {
     const prerequisites = repo.deployment?.preDeployOperations || [];
     if (config.engine !== 'async-cli' && (Object.keys(repo.operations || {}).length || prerequisites.length)) ctx.addIssue({ code: 'custom', path: ['repositories', name], message: 'OPERATIONS_REQUIRE_ASYNC_CLI' });

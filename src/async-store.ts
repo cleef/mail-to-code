@@ -44,10 +44,12 @@ export interface Operation {
     input: unknown;
     status: 'running' | 'done' | 'uncertain';
     result?: unknown;
+    report?: import('./operation-report.js').OperationReport;
 }
 // This database stores transport/runtime facts. Business progress lives in FEATURE.md.
 export class AsyncStore {
     readonly db: DatabaseSync;
+    private transactionDepth = 0;
     constructor(path: string, readOnly = false) {
         this.db = new DatabaseSync(path, { readOnly });
         if (readOnly) {
@@ -60,16 +62,20 @@ export class AsyncStore {
     }
     close() { this.db.close(); }
     transaction<T>(fn: () => T): T {
-        this.db.exec('BEGIN IMMEDIATE');
+        const depth = this.transactionDepth++, savepoint = 'async_nested_' + depth;
+        try { this.db.exec(depth ? 'SAVEPOINT ' + savepoint : 'BEGIN IMMEDIATE'); }
+        catch (error) { this.transactionDepth--; throw error; }
         try {
             const result = fn();
-            this.db.exec('COMMIT');
+            this.db.exec(depth ? 'RELEASE SAVEPOINT ' + savepoint : 'COMMIT');
             return result;
         }
         catch (e) {
-            this.db.exec('ROLLBACK');
+            this.db.exec(depth ? 'ROLLBACK TO SAVEPOINT ' + savepoint : 'ROLLBACK');
+            if (depth) this.db.exec('RELEASE SAVEPOINT ' + savepoint);
             throw e;
         }
+        finally { this.transactionDepth--; }
     }
     get<T>(kind: string, id: string): T | undefined {
         const r = this.db.prepare('SELECT value FROM records WHERE kind=? AND id=?').get(kind, id) as {
@@ -168,7 +174,7 @@ export class AsyncStore {
             return c;
         });
     }
-    queue(c: Conversation, key: string, text: string, request?: Omit<ApprovalRequest, 'id' | 'conversationId' | 'mailId'>) {
+    queue(c: Conversation, key: string, text: string, request?: Omit<ApprovalRequest, 'id' | 'conversationId' | 'mailId'>, preparedId?: string) {
         return this.transaction(() => {
             const dedupId = c.id + ':' + key, existingId = this.get<string>('mail-key', dedupId);
             if (existingId) {
@@ -181,10 +187,37 @@ export class AsyncStore {
             this.saveMail(mail);
             this.put('mail-key', dedupId, id);
             this.put('mail-request', id, request || null);
-            const r = request ? { ...request, id: randomUUID(), conversationId: c.id, mailId: id } : undefined;
+            const r = request ? { ...request, id: preparedId || randomUUID(), conversationId: c.id, mailId: id } : undefined;
             if (r)
                 this.put('request', r.id, r);
             return { mail, request: r };
+        });
+    }
+    prepareConfirmation(c: Conversation, turnId: string, key: string, proposed: Pick<ApprovalRequest, 'kind' | 'target'>) {
+        if (!turnId) throw Error('ACTIVE_TURN_REQUIRED');
+        return this.transaction(() => {
+            const id = c.id + ':' + turnId, previous = this.get<{ key: string; requestId: string }>('turn-confirmation', id);
+            if (previous) {
+                const request = this.get<ApprovalRequest>('request', previous.requestId)!;
+                if (JSON.stringify({ kind: request.kind, target: request.target }) !== JSON.stringify(proposed)) throw Error('TURN_CONFIRMATION_TARGET_CHANGED');
+                return request;
+            }
+            const request: ApprovalRequest = { ...proposed, id: randomUUID(), conversationId: c.id, mailId: '' };
+            this.put('request', request.id, request);
+            this.put('turn-confirmation', id, { key, requestId: request.id });
+            return request;
+        });
+    }
+    queueFinal(c: Conversation, turnId: string, text: string, itemIds: string[]) {
+        return this.transaction(() => {
+            const id = c.id + ':' + turnId;
+            const existing = this.get<{ mailId: string }>('turn-output', id);
+            if (existing) return this.mail(existing.mailId)!;
+            const prepared = this.get<{ requestId: string }>('turn-confirmation', id);
+            const request = prepared ? this.get<ApprovalRequest>('request', prepared.requestId)! : undefined;
+            const queued = this.queue(c, 'assistant-final:' + turnId, text, request ? { kind: request.kind, target: request.target } : undefined, request?.id);
+            this.put('turn-output', id, { turnId, itemIds, mailId: queued.mail.id });
+            return queued.mail;
         });
     }
     authorize(conversationId: string, requestId: string, sourceMailId: string, evidence: string) {
@@ -192,7 +225,7 @@ export class AsyncStore {
         if (!r || r.conversationId !== conversationId || !e || e.conversationId !== conversationId || !e.incoming.trusted)
             throw Error('APPROVAL_SOURCE_MISMATCH');
         const m = this.mail(r.mailId)!;
-        if (m.identityStatus !== 'verified' || !m.rfcMessageId || e.incoming.inReplyTo !== m.rfcMessageId)
+        if (!m || m.identityStatus !== 'verified' || !m.rfcMessageId || e.incoming.inReplyTo !== m.rfcMessageId)
             throw Error('APPROVAL_REPLY_BINDING_REQUIRED');
         if (!evidence.trim() || !e.incoming.text.includes(evidence))
             throw Error('APPROVAL_EVIDENCE_NOT_IN_NEW_BODY');
@@ -216,12 +249,14 @@ export class AsyncStore {
         this.put('operation', id, op);
         try {
             const result = await fn();
+            Object.assign(op, this.get<Operation>('operation', id));
             op.status = 'done';
             op.result = result;
             this.put('operation', id, op);
             return result;
         }
         catch (e) {
+            Object.assign(op, this.get<Operation>('operation', id));
             op.status = 'uncertain';
             this.put('operation', id, op);
             throw e;
