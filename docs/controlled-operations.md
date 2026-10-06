@@ -110,6 +110,23 @@ The controller parses this reserved entry strictly; it never executes a shell
 command. New threads receive the native tools. Updated developer instructions
 explain the compatibility entry without replaying email or restoring approvals.
 
+Persisted threads can retain earlier tool schemas and capability claims in their
+history/notes. Updating `thread/resume` instructions alone does not establish that
+the model discovered a newly installed adapter. Each incoming or recovery turn
+therefore includes current controller operation context, including when a new
+message steers an active turn. It lists only operations in the conversation's
+approved writable scope, their prerequisites, and whether existing deployment
+requests still match the current commit/profile fingerprint. Repository identity
+or private-script errors produce an unavailable capability instead of failing
+mail intake.
+
+This context supersedes old capability/status claims without replacing native
+thread history, changing approval records or rewriting the original email.
+It contains no script paths, fixed arguments or credentials. It is never accepted
+as `sourceMailId`/`evidence`; writes still require explicit trusted new-body intent
+and deployment still requires exact confirmation. Native SSH failures describe
+the sandbox, not the configured controller transport.
+
 ## Script contract
 
 Exit zero and emit exactly one JSON object to stdout:

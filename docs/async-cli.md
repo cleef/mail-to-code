@@ -145,6 +145,18 @@ Search or history absence alone never performs a reset.
 
 ## Verification
 
+After adding controlled operations to an installation with existing conversations,
+validate model discovery as well as direct adapter execution:
+
+```sh
+node scripts/verify-operation-resume.mjs
+```
+
+This Linux/Codex 0.159.2 check seeds a synthetic thread with old capability notes
+and no native operation tools, restarts it with a configured local inspection
+script, and requires Codex to discover the compatibility entry in the same thread.
+It uses no real mailbox, SSH transport or business deployment.
+
 `npm test` runs offline Node 22 tests for routing, persistent replies, duplicates,
 acknowledgement loss, interrupted turns, immutable snapshots, approval bindings,
 unknown effects, primary-only tools and read-only import. Real acceptance:

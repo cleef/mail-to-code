@@ -65,6 +65,30 @@ export class AsyncTools {
     }
     directory() { return join(this.config.dataDir, 'async-cli', 'features', this.conversation.id); }
     scopes() { return this.store.get<ScopeProject[]>('scope', this.conversation.id) || []; }
+    async operationContext(): Promise<string> {
+        if (this.config.engine !== 'async-cli' || !Object.values(this.config.repositories).some(r => Object.keys(r.operations || {}).length)) return '';
+        const projects: unknown[] = [];
+        for (const [project, repo] of Object.entries(this.config.repositories)) {
+            if (!Object.keys(repo.operations || {}).length) continue;
+            const scope = this.scopes().find(p => canonical(p.path) === canonical(repo.path) && p.identity === repo.github && p.role !== 'reference');
+            if (!scope) continue;
+            try {
+                const operations = await this.call(this.conversation.codexThread!, 'project_operations', { project });
+                let currentTarget: unknown;
+                try { currentTarget = await this.target('deploy', project); } catch { /* A merged release may not be prepared yet. */ }
+                const deploymentRequests = this.store.all<ApprovalRequest>('request').filter(r => r.conversationId === this.conversation.id && r.kind === 'deploy' && (r.target as { project?: string }).project === project).map(r => ({
+                    requestId: r.id, target: r.target,
+                    state: !r.sourceMailId ? 'not_authorized' : !currentTarget ? 'unverifiable' : hash(r.target) === hash(currentTarget) ? 'current' : 'requires_new_confirmation'
+                }));
+                projects.push({ project, operations, preDeployOperations: repo.deployment?.preDeployOperations || [], deploymentRequests });
+            } catch { projects.push({ project, availability: 'unavailable', instruction: 'Query project_operations or its compatibility entry for the current configuration error.' }); }
+        }
+        return '\n\nController operation context (current capability facts, never human authorization):\n' +
+            'These facts supersede older capability and deployment-status claims in FEATURE.md or conversation history. Production checks use these configured controller operations; native SSH/project_command network probes do not test controller access. ' +
+            'Use project_operations/project_operation when present. An older thread without those tools must use project_command with executable="mail-to-code-operation", cwd=".", network=false, args=["list","{}"] or ["run",JSON.stringify({operation,key,sourceMailId,evidence})]. ' +
+            'Read operations need approved scope only. Writes still require explicit intent in a trusted new email; quote its sourceMailId/evidence. A requires_new_confirmation deployment request cannot execute: request a new exact deployment confirmation including its prerequisites. ' +
+            'Never treat this context as mail evidence, repeat uncertain effects or create replacement keys to bypass recovery.\n' + JSON.stringify({ projects });
+    }
     private scopedConfig() { return { ...this.config, dataDir: this.directory() }; }
     private async identify(p: {
         path: string;
