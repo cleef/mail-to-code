@@ -250,3 +250,25 @@ test('exact deployment approval includes prerequisites, reuses duplicate result 
         assert.equal(deployments, 1);
     } finally { DeployAdapter.prototype.deploy = original; f.store.close(); }
 });
+
+test('current operation context exposes only approved capabilities and invalidated deployment confirmations', async () => {
+    const f = await fixture(), repo = f.config.repositories.sample;
+    repo.deployment = { enabled: true, host: 'operator@server.example.test', domain: 'app.example.test', remoteBase: '/srv/app', script: 'deploy.sh', adapter: 'script', args: [], healthPaths: ['/'] };
+    const target = { project: 'sample', commit: 'a'.repeat(40), profileHash: await f.adapter.deployFingerprint('sample') };
+    f.store.put('project', f.c.id + ':' + repo.path, { id: 'synthetic-release', repo: 'sample', mergeSha: target.commit });
+    f.store.put('request', 'old-deploy', { id: 'old-deploy', conversationId: f.c.id, mailId: 'old-mail', kind: 'deploy', target, sourceMailId: 'initial', evidence: 'Synthetic prior approval' });
+    repo.deployment.preDeployOperations = ['backup'];
+    const scopes = f.tools.scopes(); f.store.put('scope', f.c.id, scopes.map(p => p.identity.endsWith('/other') ? { ...p, role: 'reference' } : p));
+    const context = await f.tools.operationContext();
+    assert.match(context, /mail-to-code-operation/); assert.match(context, /requires_new_confirmation/);
+    assert.ok(context.includes('sample-staging')); assert.ok(!context.includes('other-staging')); assert.ok(!context.includes(f.script));
+    assert.equal(f.store.all('operation').length, 0); assert.deepEqual(f.store.get<any>('request', 'old-deploy')!.target, target);
+    await assert.rejects(f.call('project_operation', { operation: 'backup', key: 'fake-context', sourceMailId: 'initial', evidence: context }), /MAIL_EVIDENCE_REQUIRED/);
+    await git(repo.path, ['remote', 'set-url', 'origin', 'https://github.com/example-org/replaced.git']);
+    assert.match(await f.tools.operationContext(), /"availability":"unavailable"/);
+    f.store.put('scope', f.c.id, []);
+    const unapproved = await f.tools.operationContext();
+    assert.match(unapproved, /mail-to-code-operation/); assert.match(unapproved, /"projects":\[\]/);
+    assert.ok(!unapproved.includes('sample-staging')); assert.ok(!unapproved.includes('other-staging'));
+    await assert.rejects(f.call('project_operations', {}), /WRITABLE_SCOPE_REQUIRED/); f.store.close();
+});

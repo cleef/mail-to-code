@@ -96,6 +96,38 @@ test('turn completion remains internal and reply resumes stored thread', async (
     await f.bridge.stop();
     f.store.close();
 });
+
+test('resumed, steered and recovery turns receive current operations without replacing history or mail evidence', async () => {
+    const f = await fixture(), path = join(f.config.projectsRoot, 'sample'), directory = join(f.root, 'private-operations');
+    await mkdir(path); await mkdir(directory, { mode: 0o700 }); await git(path, ['init', '-b', 'main']); await git(path, ['remote', 'add', 'origin', 'https://github.com/example-org/sample.git']);
+    const c = f.store.intake(incoming('one'), 'raw original', 'body'); await f.bridge.dispatch(c); await f.bridge.stop();
+    f.history.thread.turns.at(-1).status = 'completed';
+    f.config.engine = 'async-cli';
+    const script = join(directory, 'inspect'); await writeFile(script, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    const fresh = { ...f.config, repositories: { sample: { path, github: 'example-org/sample', baseBranch: 'main', mergeMethod: 'merge' as const, checks: [], operations: { inspect: { description: 'Inspect synthetic staging', target: 'sample-staging', effect: 'read' as const, script, args: [], timeoutSeconds: 30 } } } } };
+    f.store.put('scope', c.id, [{ path, identity: 'example-org/sample', role: 'modify' }]);
+    const resumed = new AsyncBridge(f.config, f.store, f.mail, f.bridge.factory, async () => fresh);
+    f.store.intake({ ...incoming('two', 'Recheck access'), inReplyTo: incoming('one').rfcId }, 'raw reply', 'Recheck access');
+    await resumed.dispatch(f.store.conversation(c.id)!);
+    const client = f.clients.at(-1)!;
+    assert.equal(client.calls.find(x => x.method === 'thread/resume')!.params.dynamicTools, undefined);
+    const sent = client.calls.find(x => x.method === 'turn/start')!.params.input[0].text;
+    assert.ok(sent.startsWith('MAIL_INPUT_ID=two\n')); assert.match(sent, /sample-staging/); assert.match(sent, /mail-to-code-operation/);
+    assert.equal(f.store.input('two')!.incoming.text, 'Recheck access'); assert.equal(f.store.input('two')!.fullText, 'Recheck access');
+    client.history.thread.turns.at(-1).status = 'inProgress'; const current = f.store.conversation(c.id)!; current.activeTurn = client.history.thread.turns.at(-1).id; f.store.save(current);
+    f.store.intake({ ...incoming('three', 'Additional context'), inReplyTo: incoming('one').rfcId }, 'raw third', 'Additional context');
+    await resumed.dispatch(f.store.conversation(c.id)!);
+    assert.match(client.calls.find(x => x.method === 'turn/steer')!.params.input[0].text, /Controller operation context/);
+    assert.equal(f.store.all('operation').length, 0); assert.equal(f.store.mails().length, 0);
+    assert.equal(f.store.conversation(c.id)!.codexThread, 'codex-thread');
+    client.history.thread.turns.at(-1).status = 'failed'; await resumed.stop();
+    const recovered = new AsyncBridge(f.config, f.store, f.mail, f.bridge.factory, async () => fresh);
+    await recovered.dispatch(f.store.conversation(c.id)!);
+    const recovery = f.clients.at(-1)!.calls.find(x => x.method === 'turn/start')!.params.input[0].text;
+    assert.match(recovery, /^Runtime reconnection/); assert.match(recovery, /Controller operation context/);
+    assert.equal(f.store.inputs().length, 3); assert.equal(f.store.all('request').length, 0);
+    await recovered.stop(); f.store.close();
+});
 test('duplicate inbound message never starts a duplicate turn', async () => {
     const f = await fixture(), c = f.store.intake(incoming('one'), 'raw', 'body');
     await f.bridge.dispatch(c);

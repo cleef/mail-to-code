@@ -202,13 +202,14 @@ export class AsyncBridge {
         for (const c of available) {
             if (this.dispatching.has(c.id))
                 continue;
-            if (!this.clients.has(c.id) && this.clients.size + this.connecting.size >= 4)
+            if (!this.clients.has(c.id) && new Set([...this.clients.keys(), ...this.connecting.keys(), ...this.dispatching]).size >= 4)
                 continue;
             this.dispatching.add(c.id);
             void this.dispatch(c).catch(e => { const current = this.store.conversation(c.id)!; current.error = e instanceof Error ? e.message : 'RUNTIME_FAILURE'; current.failures = (current.failures || 0) + 1; current.retryAt = Date.now() + Math.min(60000, 1000 * 2 ** Math.min(current.failures, 6)); this.store.save(current); }).finally(() => this.dispatching.delete(c.id));
         }
     }
     async dispatch(c: Conversation) {
+        await this.refreshConfig();
         const wasConnected = this.clients.has(c.id), hadThread = Boolean(c.codexThread), client = await this.client(c);
         if (!wasConnected && hadThread) {
             const read = await client.request('thread/read', { threadId: c.codexThread, includeTurns: true });
@@ -239,7 +240,7 @@ export class AsyncBridge {
                 delete c.activeTurn;
                 this.store.save(c);
                 if (!t || ['interrupted', 'failed'].includes(t.status)) {
-                    const result = await client.request('turn/start', { threadId: c.codexThread, input: [{ type: 'text', text: `Runtime reconnection after turn ${previous}. Inspect current worktree and operation receipts. Continue unfinished approved work. Do not replay uncertain external effects or send an automatic recovery email.` }] });
+                    const result = await client.request('turn/start', { threadId: c.codexThread, input: [{ type: 'text', text: `Runtime reconnection after turn ${previous}. Inspect current worktree and operation receipts. Continue unfinished approved work. Do not replay uncertain external effects or send an automatic recovery email.` + await this.tool(c).operationContext() }] });
                     c.activeTurn = result.turn.id;
                     if (this.completions.has(c.activeTurn!))
                         delete c.activeTurn;
@@ -248,9 +249,9 @@ export class AsyncBridge {
             }
         }
         for (const e of this.store.inputs().filter(e => e.conversationId === c.id && e.status === 'queued')) {
+            const input = [{ type: 'text', text: inputText(e) + await this.tool(c).operationContext() }];
             e.status = 'dispatching';
             this.store.saveInput(e);
-            const input = [{ type: 'text', text: inputText(e) }];
             try {
                 const current = this.store.conversation(c.id)!;
                 let result;
