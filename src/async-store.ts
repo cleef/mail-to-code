@@ -121,6 +121,7 @@ export class AsyncStore {
     mails() { return this.all<Outbound>('mail'); }
     saveMail(m: Outbound) {
         const previous = this.mail(m.id);
+        if(previous?.replyMessageId&&['replyMessageId','replyParentRfcId','replyQuoteHash','attachmentHashes'].some(key=>JSON.stringify((previous as any)[key])!==JSON.stringify((m as any)[key])))throw Error('IMMUTABLE_REPLY_PARENT_SNAPSHOT');
         if (previous && (previous.text !== m.text || JSON.stringify(previous.attachments) !== JSON.stringify(m.attachments)))
             throw Error('IMMUTABLE_MAIL_SNAPSHOT');
         this.put('mail', m.id, m);

@@ -1,8 +1,8 @@
 import { join } from 'node:path';
 import { writeFile,stat,lstat } from 'node:fs/promises';
 import { configDir, loadConfig, privateDir, privateFile, type Config } from './config.js';
-import { GmailClient } from './gmail.js';
-import { authorize } from './oauth.js';
+import { CodexGmailTransport,closeMailTransports } from './gmail.js';
+import {migrateMail} from './mail-migration.js';
 import { Store } from './store.js';
 import { safeError } from './controller.js';
 import { Runner } from './runner.js';
@@ -19,6 +19,7 @@ import {acquireLease} from './lease.js';
 import { execute } from './process.js';
 import {Delivery} from './delivery.js';
 import {currentBinding} from './approval.js';
+import {connectMail,checkMailPlugin} from './mail-connect.js';
 import {readWorkflowGuide,initializeWorkflowGuide,stageLabel} from './workflow.js';
 
 process.umask(0o077);
@@ -31,7 +32,7 @@ async function doctor(config:Config) {
   await check('Codex CLI',()=>execute(config.codexCommand,['--version']));
   const catalogStore=new Store(join(config.dataDir,'state.sqlite')),registry=new ProjectRegistry(config,catalogStore);let selected=process.argv[3];await check('Project root',async()=>{await stat(config.projectsRoot);if(selected)selected=(await registry.resolve(selected,{sync:true})).alias;else await registry.scan(true,{sync:true});});
   for(const p of registry.entries.values()){if(selected&&selected!==p.alias)continue;await check(p.alias+' runtime/config',async()=>{if(p.error)throw new Error(p.error);await new RuntimeAdapter(config,new Runner(config)).verify(p.profile);});await check(p.alias+' GitHub write',()=>new GitHubAdapter({...config,repositories:{[p.alias]:{path:p.path,github:p.github,baseBranch:p.baseBranch,mergeMethod:p.mergeMethod,checks:[]}}},p.alias).verify());}if(selected&&!registry.entries.has(selected))checks.push({name:selected,ok:false,detail:'Unknown project'});catalogStore.close();
-  await check('Gmail account/scopes/refresh',async()=>{const gmail=await GmailClient.create(config);await gmail.verify();});
+  await check('Codex Gmail plugin protocol and identity',async()=>{const result=await checkMailPlugin(config);if(!result.ok)throw Error(result.code);});
 
   if([...registry.entries.values()].some(p=>(!selected||p.alias===selected)&&p.profile.preview.kind!=='none'))await check('Podman preview image',()=>execute('podman',['image','exists',config.screenshotImage]));
   await check('User linger',async()=>{const r=await execute('loginctl',['show-user',process.env.USER||'','-p','Linger']);if(!r.stdout.includes('Linger=yes'))throw new Error('Enable linger as root');});
@@ -40,6 +41,7 @@ async function doctor(config:Config) {
   console.log(JSON.stringify({checks,...stats},null,2));return checks.every(c=>c.ok);
 }
 async function main(){
+  if(command==='migrate-mail'){console.log(JSON.stringify(await migrateMail(process.argv.includes('--dry-run')),null,2));return;}
   if(command==='async-agent-guide'){if(process.argv[3]==='init')console.log(JSON.stringify(await initializeAgentGuide(undefined,true)));else if(!process.argv[3]){await readAgentGuide(undefined,true);console.log(join(configDir(),'ASYNC_AGENTS.md'));}else throw Error('async-agent-guide [init]');return;}
   if(command==='workflow-guide'){if(process.argv[3]==='init')console.log(JSON.stringify(await initializeWorkflowGuide()));else if(!process.argv[3])console.log(JSON.stringify({version:(await readWorkflowGuide()).version}));else throw Error('workflow-guide [init]');return;}
   if(command==='agent-guide'){if(process.argv[3]==='init')console.log(JSON.stringify(await initializeAgentGuide()));else if(!process.argv[3]){await readAgentGuide();console.log(agentGuidePath());}else throw new Error('agent-guide [init]');return;}
@@ -47,11 +49,13 @@ async function main(){
     const args=process.argv.slice(3),value=(key:string)=>args[args.indexOf(key)+1];
     if(!args.includes('--gmail')||!args.includes('--owner'))throw new Error('init --gmail agent@gmail.com --owner owner@qq.com');
     await privateDir(configDir());const path=join(configDir(),'config.json');
-    const config={engine:'async-cli',asyncMailOutput:'assistant-final',gmailAddress:value('--gmail'),ownerAddress:value('--owner'),dataDir:'~/.local/share/mail-to-code',codexCommand:'codex',githubTokenFile:'~/.config/mail-to-code/github-token',projectsRoot:'~/projects',repositories:{},profiles:{}};
-    await writeFile(path,JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});await initializeAgentGuide();await initializeAgentGuide(undefined,true);await initializeWorkflowGuide();console.log(`Created ${path}; add Desktop OAuth client and authorize.`);return;
+    const config={engine:'async-cli',asyncMailOutput:'assistant-final',gmailAddress:value('--gmail'),ownerAddress:value('--owner'),dataDir:'~/.local/share/mail-to-code',codexCommand:'codex',mailCodexHome:join(configDir(),'codex-mail'),githubTokenFile:'~/.config/mail-to-code/github-token',projectsRoot:'~/projects',repositories:{},profiles:{}};
+    await writeFile(path,JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});await initializeAgentGuide();await initializeAgentGuide(undefined,true);await initializeWorkflowGuide();console.log(`Created ${path}; edit private settings, then run mail-connect and doctor.`);return;
   }
-  const config=await loadConfig();await privateDir(config.dataDir);
-  if(command==='auth'){await authorize(config);return;}
+  const config=await loadConfig(['mail-connect','mail-plugin-check'].includes(command));
+  if(command==='mail-connect'){await connectMail(config,process.argv.includes('--device-auth'));return;}
+  if(command==='mail-plugin-check'){const result=await checkMailPlugin(config);console.log(JSON.stringify(result,null,2));if(!result.ok)process.exitCode=2;return;}
+  await privateDir(config.dataDir);
   if(command==='serve-async'||command==='serve'&&config.engine==='async-cli'){
     await (await import('./async-cli.js')).serveAsync(config);return;
   }
@@ -69,7 +73,7 @@ async function main(){
         const {readFile}=await import('node:fs/promises'),{AsyncTools}=await import('./async-tools.js');
         console.log(JSON.stringify(await new AsyncTools(config,asyncStore,c,new AbortController().signal).resolveFailed(process.argv[4],JSON.parse(await readFile(path,'utf8')))));
       }
-      else if(command==='async-reconcile-send'){const {AsyncBridge}=await import('./async-cli.js'),gmail=await GmailClient.create(config);await gmail.verify();console.log(JSON.stringify(await new AsyncBridge(config,asyncStore,gmail).reconcileSend(process.argv[3],process.argv.includes('--verified-absent'))));}
+      else if(command==='async-reconcile-send'){const {AsyncBridge}=await import('./async-cli.js'),gmail=await CodexGmailTransport.create(config);await gmail.verify();console.log(JSON.stringify(await new AsyncBridge(config,asyncStore,gmail).reconcileSend(process.argv[3],process.argv.includes('--verified-absent'))));}
       else if(command==='async-reconcile'){const c=asyncStore.conversation(process.argv[3]);if(!c||!process.argv[4])throw Error('async-reconcile <feature-id> <operation-id> [--verified-no-effect]');const {AsyncTools}=await import('./async-tools.js');console.log(JSON.stringify(await new AsyncTools(config,asyncStore,c,new AbortController().signal).reconcile(process.argv[4],process.argv.includes('--verified-no-effect'))));}
       else if(command==='async-adopt'){const c=asyncStore.conversation(process.argv[3]);if(!c?.paused||!process.argv.includes('--verified-runtime'))throw Error('async-adopt <id> --verified-runtime: first inspect actual versions, worktrees and uncertain operations; old approvals are never restored');c.paused=false;asyncStore.save(c);console.log(JSON.stringify({id:c.id,adopted:true,replayed:0,restoredGrants:0}));}
       else console.log(JSON.stringify(command==='async-import'?importLegacy(asyncStore,join(config.dataDir,'state.sqlite')):{conversations:asyncStore.conversations(),pendingInputs:asyncStore.inputs().filter(e=>e.status!=='accepted').map(e=>({id:e.id,status:e.status})),outbox:asyncStore.mails().map(m=>({id:m.id,status:m.status,identity:m.identityStatus})),operations:asyncStore.all('operation')},null,2));}
@@ -85,7 +89,7 @@ async function main(){
   if(command==='mail-links'){
     const action=process.argv[3]||'check';if(!['check','backfill'].includes(action))throw Error('mail-links [check|backfill]');
     if(action==='backfill'){
-      const gmail=await GmailClient.create(config);await gmail.verify();console.log(JSON.stringify(await new Delivery(config,store,gmail).backfill()));
+      const gmail=await CodexGmailTransport.create(config);await gmail.verify();console.log(JSON.stringify(await new Delivery(config,store,gmail).backfill()));
       for(const s of store.sessions()){
         const b=currentBinding(s);if(!b||store.get('reply-recovery-required:'+s.id)!=='1'||store.mail(b.noticeId)?.identityStatus!=='verified')continue;
         store.transaction(()=>{const m=store.notify(s,'help',`邮件回复关联已修复。此前被拒绝的回复不会自动执行。当前状态：${s.state}\n版本：${b.version}\n${store.mail(b.noticeId)!.text}\n可以回复本邮件明确确认上述操作；合并和发布需要分别明确说明。`);m.approvalBinding=b;store.saveMail(m);store.set('reply-recovery-required:'+s.id,'0');});
@@ -95,7 +99,7 @@ async function main(){
   }
   if(command==='reconcile-send'){
     const id=process.argv[3],mail=store.mail(id);if(!mail||!['uncertain','failed'].includes(mail.status))throw new Error('Expected an uncertain/failed internal outbox ID');
-    const gmail=await GmailClient.create(config);await gmail.verify();const result=await new Delivery(config,store,gmail).reconcile(mail);
+    const gmail=await CodexGmailTransport.create(config);await gmail.verify();const result=await new Delivery(config,store,gmail).reconcile(mail);
     if(result==='verified')console.log('Reconciled sent message and delivered RFC identity');
     else if(result==='absent'&&process.argv.includes('--retry-confirmed-absent')){mail.status='pending';mail.identityStatus=undefined;store.saveMail(mail);console.log('Explicit retry queued after operator verification; search absence alone does not prove non-delivery');}
     else{console.log('No verified unique sent message; remains blocked. Inspect Gmail before confirming retry.');process.exitCode=2;}store.close();return;
@@ -110,16 +114,16 @@ async function main(){
     if(await multiWork.reconcileDeploy(s,target)){target.deployed=true;target.deployUncertain=false;s.state='MERGED';store.save(s);store.notify(s,'deployed',`${target.projectId}: reconciled ${target.mergeSha}`);}
     else if(process.argv.includes('--failed')){target.deployUncertain=false;s.state='FAILED';s.failedKind='deploy';s.deployTarget=target.projectId;store.save(s);}else{console.log('Approved release not active; inspect production before --failed');process.exitCode=2;}store.close();return;
   }
-  if(command!=='serve')throw new Error('Commands: init, agent-guide, workflow-guide, auth, projects, memory, doctor [project], status, migrate, adopt-config [--dry-run], migration-status, serve, mail-links, reconcile-send, reconcile-merge, reconcile-deploy');
+  if(command!=='serve')throw new Error('Commands: init, agent-guide, workflow-guide, mail-connect, mail-plugin-check, migrate-mail, projects, memory, doctor [project], status, migrate, adopt-config [--dry-run], migration-status, serve, mail-links, reconcile-send, reconcile-merge, reconcile-deploy');
   if(store.get('schema_version')!=='7')throw new Error('Stop service, run migrate and doctor before starting v7');
-  const releaseLease=await acquireLease(config.dataDir);const gmail=await GmailClient.create(config);try{await gmail.verify();await new RuntimeAdapter(config,new Runner(config)).cleanOrphans();}catch(e){await releaseLease();throw e;}store.recover();
+  const releaseLease=await acquireLease(config.dataDir);const gmail=await CodexGmailTransport.create(config);try{await gmail.verify();await new RuntimeAdapter(config,new Runner(config)).cleanOrphans();}catch(e){await releaseLease();throw e;}store.recover();
   // Shared polling and verified outbox transport; business effects use multi-project adapters.
   const controller=new MultiController(config,store,gmail,{} as import('./controller.js').Work,registry,multiWork);
   let stopping=false,lastPoll=0,busy=false;
   const tick=async()=>{if(stopping)return;controller.startNext();if(busy)return;busy=true;try{if(Date.now()-lastPoll>=config.pollSeconds*1000){lastPoll=Date.now();const updated=await loadConfig();Object.assign(config,{projectsRoot:updated.projectsRoot,productDocs:updated.productDocs,profiles:updated.profiles,repositories:updated.repositories});await controller.poll();}await controller.flush();controller.startNext();}finally{busy=false;}};
   const interval=setInterval(()=>void tick().catch(e=>console.error(safeError(e))),1000);await tick();
-  const stop=async()=>{if(stopping)return;stopping=true;clearInterval(interval);await controller.stop();while(busy)await new Promise(r=>setTimeout(r,50));store.close();await releaseLease();};
+  const stop=async()=>{if(stopping)return;stopping=true;clearInterval(interval);await controller.stop();while(busy)await new Promise(r=>setTimeout(r,50));await gmail.close();store.close();await releaseLease();};
   process.once('SIGTERM',()=>void stop());process.once('SIGINT',()=>void stop());
   console.log('mail-to-code running; notifications are emitted only for decisions/results/failures.');
 }
-main().catch(e=>{console.error(safeError(e));process.exitCode=1;});
+main().then(async()=>{if(!['serve','serve-async'].includes(command))await closeMailTransports();}).catch(async e=>{await closeMailTransports();console.error(safeError(e));process.exitCode=1;});

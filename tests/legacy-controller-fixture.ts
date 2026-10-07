@@ -1,7 +1,7 @@
 // Historical actor fixture for transport/recovery regression tests; never shipped as a live entry.
 import type { Config } from '../src/config.js';
 import { Store } from '../src/store.js';
-import { GmailError, type GmailClient } from '../src/gmail.js';
+import { GmailError, type MailTransport } from '../src/mail-transport.js';
 import {directive} from './legacy-command-fixture.js';
 import type { Incoming, Session, Job, Outbound, Attachment } from '../src/types.js';
 import type { RunResult } from '../src/runner.js';

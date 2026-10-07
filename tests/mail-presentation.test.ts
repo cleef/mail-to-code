@@ -7,7 +7,7 @@ import {simpleParser} from 'mailparser';
 import {Store} from '../src/store.js';
 import {ProfileSchema} from '../src/profile.js';
 import {ConfigSchema} from '../src/config.js';
-import {GmailClient} from '../src/gmail.js';
+import {pluginFixture} from './plugin-fixture.js';
 import {Delivery} from '../src/delivery.js';
 import {approvalVersion,bindingValid} from '../src/approval.js';
 import {MailBriefSchema} from '../src/mail-brief.js';
@@ -80,13 +80,13 @@ test('HTML escapes every cell/paragraph; only existing CID images are allowed wi
 test('Snapshots survive restart/live changes and MIME resend with identical body/identity; legacy has no presentation',async()=>{
  const root=await realpath(await mkdtemp(join(tmpdir(),'mail-presentation-'))),store=new Store(join(root,'state.sqlite'));store.set('schema_version','6');let restarted:Store|undefined;
  try{const s=task(),m=store.notify(s,'plan','');store.save(s);const saved=structuredClone(m);s.title='new';s.state='DONE';s.targets=[];store.save(s);m.status='uncertain';store.saveMail(m);store.close();restarted=new Store(join(root,'state.sqlite'));assert.equal(restarted.get('schema_version'),'6');assert.deepEqual(restarted.mail(m.id)!.presentation,saved.presentation);assert.equal(restarted.mail(m.id)!.text,saved.text);
- const config=ConfigSchema.parse({gmailAddress:'agent@gmail.com',ownerAddress:'owner@example.test',dataDir:root});const client=new (GmailClient as any)(config,{});const wires:string[]=[];client.request=async(_p:string,_method:string,data:any)=>{wires.push(data.raw);return {id:'sent',threadId:'thread'};};
- const send={to:config.ownerAddress,subject:s.subject,text:saved.text,summary:saved.summary,presentation:saved.presentation,messageId:saved.id,deliveryMarker:saved.deliveryMarker,inReplyTo:'<parent>',references:['<parent>'],attachments:[]};await client.send(send);await client.send(send);
- for(const wire of wires){const delivery:Delivery=new Delivery(config,restarted,{read:async()=>({id:'sent',threadId:'thread',raw:wire,labelIds:['SENT']})} as any);assert.equal((await delivery.inspect(saved,{...s,subject:send.subject},'sent')).rfcMessageId,saved.id);const mime=await simpleParser(Buffer.from(wire,'base64url'));assert.equal(mime.text!.trim(),(saved.text+'\n\n[MAIL-REF: '+saved.deliveryMarker+']').trim());assert.equal(mime.messageId,saved.id);assert.equal(mime.inReplyTo,'<parent>');assert.equal((String(mime.html).match(/Feature name\(description\)/g)||[]).length,1);assert.match(String(mime.html),/方案要点：产品/);}
+ const config=ConfigSchema.parse({gmailAddress:'agent@gmail.com',ownerAddress:'owner@example.test',dataDir:root});const wires:string[]=[];const {client}=pluginFixture(config,(_args,raw)=>wires.push(raw));
+ const send={replyMessageId:'synthetic-parent',to:config.ownerAddress,subject:s.subject,text:saved.text,summary:saved.summary,presentation:saved.presentation,messageId:saved.id,deliveryMarker:saved.deliveryMarker,inReplyTo:'<parent>',references:['<parent>'],attachments:[]};await client.send(send);await client.send(send);
+ for(const wire of wires){const delivery:Delivery=new Delivery(config,restarted,{read:async()=>({id:'sent',threadId:'thread',raw:wire,labelIds:['SENT']})} as any);assert.equal((await delivery.inspect(saved,{...s,subject:send.subject},'sent')).rfcMessageId,'<delivered@provider.example.test>');const mime=await simpleParser(Buffer.from(wire,'base64url'));assert.equal(mime.text!.trim(),(saved.text+'\n\n[MAIL-REF: '+saved.deliveryMarker+']').trim());assert.equal(mime.messageId,'<delivered@provider.example.test>');assert.equal(mime.inReplyTo,'<parent@gmail.com>');assert.equal((String(mime.html).match(/Feature name\(description\)/g)||[]).length,1);assert.match(String(mime.html),/方案要点：产品/);}
  const artifact=join(root,'artifacts','proof.png');await mkdir(join(root,'artifacts'));await writeFile(artifact,Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=','base64'));
  const image=restarted.notify(task(),'review','synthetic',[{path:artifact,filename:'proof.png',cid:'proof@test'}]);await client.send({...send,text:image.text,summary:image.summary,presentation:image.presentation,messageId:image.id,deliveryMarker:image.deliveryMarker,attachments:image.attachments});const pictured=await simpleParser(Buffer.from(wires.at(-1)!,'base64url'),{skipImageLinks:true});assert.equal(pictured.attachments[0].cid,'proof@test');assert.match(pictured.text!,/图片仅作视觉证据/);assert.match(String(pictured.html),/cid:proof@test/);
  await assert.rejects(client.send({...send,text:'changed'}),/MAIL_TEXT_SNAPSHOT_MISMATCH/);
- await client.send({to:config.ownerAddress,subject:'old',text:'历史正文 '+sha,messageId:'<legacy>'});const legacy=await simpleParser(Buffer.from(wires.at(-1)!,'base64url'));assert.equal(legacy.text!.trim(),'历史正文 '+sha);
+ await client.send({replyMessageId:'synthetic-parent',to:config.ownerAddress,subject:'old',text:'历史正文 '+sha,messageId:'<legacy>'});const legacy=await simpleParser(Buffer.from(wires.at(-1)!,'base64url'));assert.equal(legacy.text!.trim(),'历史正文 '+sha);
  }finally{try{store.close();}catch{}restarted?.close();await rm(root,{recursive:true,force:true});}
 });
 test('Replanning retains existing implementation; documentation Review and legacy single-repo checks are truthful',()=>{

@@ -44,6 +44,7 @@ export interface Outbound {
   status: 'pending' | 'sending' | 'sent' | 'uncertain' | 'failed'; gmailId?: string; threadId?: string;
   createdAt: string; lastError?: string; attempts: number;
   rfcMessageId?:string; identityCheckedAt?:string; identityError?:string; sentAt?:string; attemptedAt?:string; identityStatus?:'pending'|'verified'|'failed'; deliveryMarker?:string; approvalBinding?:ApprovalBinding;
+  replyMessageId?:string; replyParentRfcId?:string; replyQuoteHash?:string; attachmentHashes?:string[];
   summary?:MailSummary; questions?:MailQuestion[]; presentation?:MailPresentation;
 }
 export interface Incoming { id: string; threadId: string; rfcId: string; inReplyTo: string; references?:string[]; subject: string; text: string; from: string; trusted: boolean; reason?: string; }

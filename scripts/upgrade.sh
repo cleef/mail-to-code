@@ -14,8 +14,10 @@ npm test
 node dist/src/cli.js agent-guide init
 node dist/src/cli.js async-agent-guide init
 node dist/src/cli.js workflow-guide init
-node dist/src/cli.js migrate
-node dist/src/cli.js mail-links backfill
+node dist/src/cli.js migrate-mail --dry-run
+node dist/src/cli.js migrate-mail
+# The legacy engine's schema migration is separate from mailbox migration.
+./scripts/install-user.sh
 node dist/src/cli.js doctor
 node scripts/sandbox-probe.mjs
 node scripts/verify-reply.mjs --permissions

@@ -66,7 +66,7 @@ export class Store {
     if(mail.summary){mail.presentation=createPresentation(session,mail,text,this.mails().filter(m=>m.sessionId===session.id&&m.stageId===mail.stageId).at(-1)?.presentation);mail.text=mail.presentation.text;}
     this.saveMail(mail); return mail;
   }
-  saveMail(mail: Outbound) { this.db.prepare('INSERT INTO outbox VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data').run(mail.id,mail.sessionId,mail.status,JSON.stringify(mail)); }
+  saveMail(mail: Outbound) { const previous=this.mail(mail.id);if(previous?.replyMessageId&&['replyMessageId','replyParentRfcId','replyQuoteHash','attachmentHashes'].some(key=>JSON.stringify((previous as any)[key])!==JSON.stringify((mail as any)[key])))throw Error('IMMUTABLE_REPLY_PARENT_SNAPSHOT');this.db.prepare('INSERT INTO outbox VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data').run(mail.id,mail.sessionId,mail.status,JSON.stringify(mail)); }
   mail(id: string): Outbound|undefined { return this.read<Outbound>('outbox',id); }
   replyMail(id:string):Outbound|undefined {if(!id)return;const matches=this.mails().filter(m=>m.id===id||m.identityStatus==='verified'&&m.rfcMessageId===id);return matches.length===1?matches[0]:undefined;}
   mails(): Outbound[] { return this.all<Outbound>('outbox'); }

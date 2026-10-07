@@ -18,8 +18,8 @@ export const ConfigSchema = z.object({
   asyncMailOutput:z.enum(['queue-mail','assistant-final']).default('queue-mail'),
   gmailAddress: z.string().email(), ownerAddress: z.string().email(),
   dataDir: z.string().default('~/.local/share/mail-to-code'), codexCommand: z.string().default('codex'),
+  mailCodexHome: z.string().min(1).optional(),
   pollSeconds: z.number().int().min(10).default(60), timeoutSeconds: z.number().int().min(30).default(3600),
-  oauthPort: z.number().int().min(1024).max(65535).default(8765),
   githubTokenFile: z.string().optional(), repositories: z.record(repository).default({}),
   projectsRoot:z.string().default('~/projects'),productDocs:z.string().default(''),
   profiles:z.record(ProfileSchema).default({}),controllerRepository:z.string().default(''),protectedRepositories:z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/)).default([]),
@@ -35,13 +35,17 @@ export const ConfigSchema = z.object({
 });
 export type Config = z.infer<typeof ConfigSchema>;
 export const expand = (path: string) => resolve(path.startsWith('~/') ? join(homedir(), path.slice(2)) : path);
-export async function loadConfig(): Promise<Config> {
+export async function loadConfig(mailSetupOnly=false): Promise<Config> {
   const path = join(configDir(), 'config.json');
   await privateFile(path);
-  const config = ConfigSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+  const raw=JSON.parse(await readFile(path,'utf8'));
+  if('oauthPort' in raw&&!mailSetupOnly)throw Error('MAIL_MIGRATION_REQUIRED: stop service and run migrate-mail --dry-run');
+  if(mailSetupOnly)delete raw.oauthPort;
+  const config = ConfigSchema.parse(raw);
   config.gmailAddress = config.gmailAddress.toLowerCase(); config.ownerAddress = config.ownerAddress.toLowerCase();
   if (config.gmailAddress === config.ownerAddress) throw new Error('Agent and owner mailboxes must differ');
   config.dataDir = expand(config.dataDir);config.projectsRoot=expand(config.projectsRoot);config.productDocs=config.productDocs?expand(config.productDocs):'';
+  if (config.mailCodexHome) config.mailCodexHome = expand(config.mailCodexHome);
   for (const repo of Object.values(config.repositories)) { repo.path = expand(repo.path); if (repo.productDocs) repo.productDocs = expand(repo.productDocs); }
   if (config.githubTokenFile) config.githubTokenFile = expand(config.githubTokenFile);
   if(!config.controllerRepository){

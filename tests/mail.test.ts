@@ -60,3 +60,5 @@ test('runner preserves operator proxy routing without forwarding controller cred
     assert.equal(env.GITHUB_TOKEN,undefined);assert.equal(env.MAIL_TO_CODE_SECRET,undefined);
   }finally{for(const [k,value] of Object.entries(previous)){if(value===undefined)delete process.env[k];else process.env[k]=value;}}
 });
+
+test('authenticated raw mail without a valid RFC Message-ID cannot enter a task',async()=>{const raw=Buffer.from('From: owner@qq.com\r\nTo: agent@gmail.com\r\nAuthentication-Results: mx.google.com; dkim=pass header.d=qq.com; dmarc=pass header.from=qq.com\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nImplement a fixture').toString('base64url');const incoming=await parseIncoming('provider-id','thread',raw,'owner@qq.com');assert.equal(incoming.trusted,false);assert.equal(incoming.reason,'missing_rfc_identity');});

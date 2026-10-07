@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {simpleParser} from 'mailparser';
 import {ConfigSchema} from '../src/config.js';
-import {GmailClient} from '../src/gmail.js';
+import {pluginFixture} from './plugin-fixture.js';
 import {Store} from '../src/store.js';
 import {createSummary,summaryText,summaryHtml} from '../src/mail-summary.js';
 import type {Session,RepoExecution,WorkflowStage} from '../src/types.js';
@@ -39,11 +39,10 @@ test('HTML uses an inline table with wrapping, escapes Chinese/long names and re
 });
 test('Actual multipart MIME carries equivalent plain/table content plus unchanged identity and marker',async()=>{
  const config=ConfigSchema.parse({gmailAddress:'agent@gmail.com',ownerAddress:'owner@qq.com',projectsRoot:'/tmp',productDocs:'/tmp',dataDir:'/tmp/mail-test'});
- const client=new (GmailClient as any)(config,{});let wire:any;
- client.request=async(path:string,method:string,body:any)=>{wire=body;return {id:'sent',threadId:'thread'};};
+ let wire:any;const {client}=pluginFixture(config,(args,raw)=>{wire={...args,raw};});
  const summary=createSummary(task())!,text=summaryText(summary)+'本次只规划实施，等待 START。',marker='a1234567-1234-1234-1234-123456789abc';
- await client.send({to:config.ownerAddress,subject:'中文任务',text,summary,messageId:'<snapshot@mail-to-code.local>',inReplyTo:'<parent@gmail.com>',references:['<parent@gmail.com>'],deliveryMarker:marker,threadId:'thread'});
- const mime=await simpleParser(Buffer.from(wire.raw,'base64url'));assert.equal(mime.messageId,'<snapshot@mail-to-code.local>');assert.equal(mime.inReplyTo,'<parent@gmail.com>');assert.equal(mime.headers.get('x-mail-to-code-delivery'),marker);assert.equal(wire.threadId,'thread');
+ await client.send({replyMessageId:'synthetic-parent',to:config.ownerAddress,subject:'中文任务',text,summary,messageId:'<snapshot@mail-to-code.local>',inReplyTo:'<parent@gmail.com>',references:['<parent@gmail.com>'],deliveryMarker:marker,threadId:'thread'});
+ const mime=await simpleParser(Buffer.from(wire.raw,'base64url'));assert.equal(mime.messageId,'<delivered@provider.example.test>');assert.equal(mime.inReplyTo,'<parent@gmail.com>');assert.equal(wire.reply_message_id,'synthetic-parent');assert.equal(wire.cc,undefined);assert.equal(wire.bcc,undefined);
  assert.equal(mime.text?.trim(),(text+'\n\n[MAIL-REF: '+marker+']').trim());assert.ok(String(mime.html).includes('<table'));assert.equal((String(mime.html).match(/Feature name\(description\)/g)||[]).length,1);assert.match(String(mime.html),/等待 START/);
 });
 

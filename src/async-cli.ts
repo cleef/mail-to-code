@@ -14,12 +14,14 @@ import { Delivery, type MailTransport } from './delivery.js';
 import { readAgentGuide } from './agent-guide.js';
 import { readWorkflowGuide } from './workflow.js';
 import { acquireLease } from './lease.js';
-import { GmailClient } from './gmail.js';
+import { CodexGmailTransport } from './gmail.js';
 import { execute } from './process.js';
 import type { Outbound } from './types.js';
 import { projectLocations } from './async-projects.js';
 import { asyncPolicy } from './async-policy.js';
 import { OperationsAdapter } from './operations.js';
+import { scanMailbox } from './mail-scan.js';
+import { checkMailPlugin } from './mail-connect.js';
 import { FinalMail } from './final-mail.js';
 import { operationStatus, safeError } from './operation-report.js';
 export { asyncPolicy } from './async-policy.js';
@@ -56,7 +58,7 @@ export class AsyncBridge {
         if (!this.configLoader)
             return;
         const fresh = await this.configLoader();
-        if (['dataDir', 'projectsRoot', 'gmailAddress', 'ownerAddress', 'codexCommand', 'asyncMailOutput'].some(k => (fresh as any)[k] !== (this.config as any)[k]))
+        if (['dataDir', 'projectsRoot', 'gmailAddress', 'ownerAddress', 'codexCommand', 'mailCodexHome', 'asyncMailOutput'].some(k => (fresh as any)[k] !== (this.config as any)[k]))
             throw Error('RUNTIME_CONFIG_CHANGED_RESTART_REQUIRED');
         Object.assign(this.config, { repositories: fresh.repositories, profiles: fresh.profiles, controllerRepository: fresh.controllerRepository, protectedRepositories: fresh.protectedRepositories, githubTokenFile: fresh.githubTokenFile });
     }
@@ -179,33 +181,13 @@ export class AsyncBridge {
     }
     async poll() {
         await this.refreshConfig();
-        let cursor = this.store.meta('gmail_cursor');
-        if (!cursor) {
-            this.store.meta('started_at', String(Math.floor(Date.now() / 1000)));
-            const profile = await this.mail.profile();
-            this.store.meta('gmail_cursor', profile.historyId);
-            return;
-        }
-        let result;
-        try {
-            result = await this.mail.history(cursor);
-        }
-        catch (e) {
-            if ((e as {
-                status?: number;
-            }).status !== 404)
-                throw e;
-            const profile = await this.mail.profile();
-            result = { messages: await this.mail.search(`from:${this.config.ownerAddress} after:${this.store.meta('started_at')}`), cursor: profile.historyId };
-        }
-        for (const ref of result.messages) {
-            if (this.store.input(ref.id) || this.store.get('rejected', ref.id) || this.store.get('quarantine', ref.id))
-                continue;
-            const message = await this.mail.read(ref.id);
-            await this.accept(ref.id, ref.threadId, message.raw);
-        }
-        this.store.meta('gmail_cursor', result.cursor);
+        await scanMailbox(this.mail,{get:key=>this.store.meta(key),set:(key,value)=>this.store.meta(key,value),transaction:fn=>this.store.transaction(fn)},this.config.ownerAddress,async id=>{
+            if(this.store.input(id)||this.store.get('rejected',id)||this.store.get('quarantine',id))return;
+            const message=await this.mail.read(id);
+            await this.accept(message.id,message.threadId,message.raw);
+        });
     }
+
     async pump() {
         if (this.stopping)
             return;
@@ -362,6 +344,7 @@ export class AsyncBridge {
                 this.store.saveMail(m);
             }
             if (m.status === 'uncertain' || m.status === 'sent' && m.identityStatus !== 'verified') {
+                if(Date.now()-Date.parse(m.identityCheckedAt||'1970-01-01')<60000)continue;
                 await delivery.reconcile(m);
                 continue;
             }
@@ -369,13 +352,19 @@ export class AsyncBridge {
                 continue;
             const c = this.store.conversation(m.sessionId)!;
             const latest = this.store.inputs().filter(e => e.conversationId === c.id).at(-1);
+            if(this.mail.prepareReply&&!m.replyMessageId){
+                if(!latest)throw Error('MAIL_REPLY_PARENT_MISSING');
+                const frozen=await this.mail.prepareReply(latest.id,m.attachments);
+                m.replyMessageId=latest.id;m.replyParentRfcId=frozen.rfcId;m.replyQuoteHash=frozen.quoteHash;m.attachmentHashes=frozen.attachmentHashes;m.threadId=frozen.threadId;
+                this.store.saveMail(m);
+            }
             m.status = 'sending';
             m.attempts++;
             m.attemptedAt = new Date().toISOString();
-            m.threadId = c.gmailThread;
+            m.threadId ||= c.gmailThread;
             this.store.saveMail(m);
             try {
-                const hit = await this.mail.send({ to: this.config.ownerAddress, subject: c.subject, text: m.text, markdown: true, deliveryMarker: m.deliveryMarker, threadId: m.threadId, inReplyTo: latest?.incoming.rfcId, references: latest?.incoming.references });
+                const hit = await this.mail.send({ replyMessageId:m.replyMessageId, to: this.config.ownerAddress, subject: c.subject, text: m.text, markdown: true, deliveryMarker: m.deliveryMarker, threadId: m.threadId, inReplyTo: latest?.incoming.rfcId, references: latest?.incoming.references,attachments:m.attachments,attachmentHashes:m.attachmentHashes });
                 m.gmailId = hit.id;
                 m.status = 'sent';
                 this.store.saveMail(m);
@@ -446,10 +435,10 @@ export function importLegacy(store: AsyncStore, path: string) {
 }
 export async function serveAsync(config: Config) {
     const release = await acquireLease(config.dataDir);
-    let store: AsyncStore | undefined, bridge: AsyncBridge | undefined;
+    let store: AsyncStore | undefined, bridge: AsyncBridge | undefined, gmail: CodexGmailTransport | undefined;
     try {
         store = new AsyncStore(join(config.dataDir, 'async-cli.sqlite'));
-        const gmail = await GmailClient.create(config);
+        gmail = await CodexGmailTransport.create(config);
         await gmail.verify();
         bridge = new AsyncBridge(config, store, gmail, undefined, loadConfig);
         let stopping = false, busy = false, lastPoll = 0;
@@ -459,8 +448,8 @@ export async function serveAsync(config: Config) {
             busy = true;
             try {
                 if (Date.now() - lastPoll >= config.pollSeconds * 1000) {
-                    await bridge!.poll();
                     lastPoll = Date.now();
+                    await bridge!.poll();
                 }
                 await bridge!.flush();
                 await bridge!.pump();
@@ -479,6 +468,7 @@ export async function serveAsync(config: Config) {
             while (busy)
                 await new Promise(r => setTimeout(r, 20));
             await bridge!.stop();
+            await gmail?.close();
             store!.close();
             await release();
         };
@@ -488,6 +478,7 @@ export async function serveAsync(config: Config) {
     }
     catch (e) {
         await bridge?.stop();
+        await gmail?.close();
         store?.close();
         await release();
         throw e;
@@ -527,6 +518,6 @@ export async function doctorAsync(config: Config) {
         try { for (const project of Object.keys(config.repositories)) await new OperationsAdapter(config, store, 'doctor').list(project); }
         finally { store.close(); }
     });
-    await check('Gmail identity and scopes', async () => { await (await GmailClient.create(config)).verify(); });
+    await check('Codex Gmail plugin protocol and identity', async () => { const result=await checkMailPlugin(config);if(!result.ok)throw Error(result.code); });
     return { engine: 'async-cli', checks, ok: checks.every(c => c.ok) };
 }

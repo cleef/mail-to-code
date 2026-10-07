@@ -22,9 +22,9 @@ export class AppServer extends EventEmitter implements Rpc {
     private stopped = false;
     private diagnostic = '';
     private closing?: Promise<void>;
-    constructor(readonly command: string, readonly args: string[], readonly cwd: string, readonly handler: (r: ServerRequest) => Promise<unknown>, readonly timeoutMs = 60000) { super(); }
+    constructor(readonly command: string, readonly args: string[], readonly cwd: string, readonly handler: (r: ServerRequest) => Promise<unknown>, readonly timeoutMs = 60000, readonly environment?: NodeJS.ProcessEnv) { super(); }
     async start() {
-        this.child = spawn(this.command, ['app-server', ...this.args, '--stdio'], { cwd: this.cwd, env: shellEnvironment(), stdio: 'pipe', detached: true });
+        this.child = spawn(this.command, ['app-server', ...this.args, '--stdio'], { cwd: this.cwd, env: this.environment || shellEnvironment(), stdio: 'pipe', detached: true });
         const lines = createInterface({ input: this.child.stdout });
         lines.on('line', line => {
             try {
