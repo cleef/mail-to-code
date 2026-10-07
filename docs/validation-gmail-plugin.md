@@ -4,6 +4,10 @@ The transport is validated against Node 22.23.2, Codex CLI 0.159.2 and official
 Gmail plugin 0.1.10. Changing either protocol version requires another server
 capability and delivery check.
 
+- A fresh checkout installed with Node 22 and passed all **264 tests**. The clean
+  build removes obsolete executable entry points.
+- Native Linux sandbox probes denied access to the dedicated mail login in both
+  development and reply profiles; account apps are disabled in both.
 - A dedicated server ChatGPT login exposed official Gmail. Direct app-server
   calls verified the configured identity without a model turn.
 - Search pagination returned immutable `message_ids`; the terminal
