@@ -1,7 +1,7 @@
 import {ScopeDecisionSchema,SCOPE_OUTPUT,SCOPE_GUIDANCE,scopeInventory,validateScope,ScopeResolutionError,type ScopeDecision} from './scope.js';
 import {QuestionInputSchema,QUESTION_OUTPUT,DECISION_GUIDANCE} from './questions.js';
 import {MailBriefSchema,MAIL_BRIEF_OUTPUT,MAIL_BRIEF_PROMPT,MAIL_LANGUAGE_PROMPT} from './mail-brief.js';
-import {readdirSync,existsSync} from 'node:fs';
+import {readdirSync,existsSync,realpathSync} from 'node:fs';
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -37,8 +37,15 @@ export const OUTPUT_SCHEMA={type:'object',additionalProperties:false,required:['
 }};
 // Code/model subprocesses get no controller tokens or unrelated credentials.
 export function shellEnvironment():NodeJS.ProcessEnv { const result:NodeJS.ProcessEnv={}; for(const k of ['PATH','LANG','LC_ALL','TMPDIR','TZ','HOME','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy'])if(process.env[k])result[k]=process.env[k];return result; }
-export function replyPolicy(cwd:string):string[]{
-  return ['-c','approval_policy="never"','-c','default_permissions="mail-to-code-reply"','-c',`permissions.mail-to-code-reply.filesystem={":root"="deny",":minimal"="read",${JSON.stringify(cwd)}="read",":tmpdir"="write",":slash_tmp"="write"}`,'-c','permissions.mail-to-code-reply.network.enabled=false','-c','features.plugins=false','-c','features.hooks=false','-c','web_search="disabled"','-c','shell_environment_policy.inherit="core"'];
+function mailCredentialPaths(config?:Pick<Config,'mailCodexHome'>){
+  const home=config?.mailCodexHome ? resolve(config.mailCodexHome.startsWith('~/') ? join(homedir(),config.mailCodexHome.slice(2)) : config.mailCodexHome) : resolve(configDir(),'codex-mail');
+  return existsSync(home)?[...new Set([home,realpathSync(home)])]:[];
+}
+export function replyPolicy(cwd:string,config?:Pick<Config,'mailCodexHome'>):string[]{
+  const filesystem:Record<string,string>={':root':'deny',':minimal':'read',[cwd]:'read',':tmpdir':'write',':slash_tmp':'write'};
+  for(const path of mailCredentialPaths(config))filesystem[path]='deny';
+  const table=Object.entries(filesystem).map(([path,access])=>JSON.stringify(path)+'='+JSON.stringify(access)).join(',');
+  return ['-c','approval_policy="never"','-c','default_permissions="mail-to-code-reply"','-c',`permissions.mail-to-code-reply.filesystem={${table}}`,'-c','permissions.mail-to-code-reply.network.enabled=false','-c','features.apps=false','-c','features.plugins=false','-c','features.hooks=false','-c','web_search="disabled"','-c','shell_environment_policy.inherit="core"'];
 }
 export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop',readPaths:string[]=[],analysis=false,trustedProjectLinks:string[]=[],additionalFilesystem:Record<string,string>={}):string[] {
   const filesystem:Record<string,string>={':root':'deny',':minimal':'read',[resolve(worktree)]:phase==='plan'?'read':'write',
@@ -69,6 +76,7 @@ export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop'
     for(const p of readPaths)filesystem[resolve(p)]='read';
   }
   Object.assign(filesystem,additionalFilesystem);
+  for(const path of mailCredentialPaths(config))filesystem[path]='deny';
   // Normalize the complete policy, including async masks. A denied parent already
   // hides exact descendants, unless an intervening read/write rule reopens them.
   // Keep glob masks: they also protect files created later in writable task roots.
@@ -84,7 +92,7 @@ export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop'
     '-c',`permissions.mail-to-code-task.filesystem=${filesystemToml}`,
     '-c','permissions.mail-to-code-task.network.enabled=false',
     '-c',`mcp_servers.gmail.command=${JSON.stringify(process.execPath)}`,
-    '-c','mcp_servers.gmail.enabled=false','-c','features.plugins=false','-c','features.hooks=false','-c','web_search="disabled"',
+    '-c','mcp_servers.gmail.enabled=false','-c','features.apps=false','-c','features.plugins=false','-c','features.hooks=false','-c','web_search="disabled"',
     '-c','shell_environment_policy.inherit="core"',
     '-c','shell_environment_policy.ignore_default_excludes=false'];
   return args;
@@ -102,7 +110,7 @@ export function disabledMcpPolicy(servers:{name?:string;transport?:{type?:string
 }
 export class Runner {
   constructor(readonly config:Config) {}
-  async interpret(dir:string,schema:unknown,prompt:string,signal:AbortSignal){return this.invoke(dir,undefined,replyPolicy(dir),schema,prompt,dir,signal,()=>{},true);}
+  async interpret(dir:string,schema:unknown,prompt:string,signal:AbortSignal){return this.invoke(dir,undefined,replyPolicy(dir,this.config),schema,prompt,dir,signal,()=>{},true);}
   async run(session:Session,phase:'plan'|'develop',feedback:string,signal:AbortSignal,onThread:(id:string)=>void):Promise<RunResult> {
     if(!session.worktree)throw new Error('Missing worktree');
     const dir=join(this.config.dataDir,'runs',session.id,`${Date.now()}`);await mkdir(dir,{recursive:true,mode:0o700});

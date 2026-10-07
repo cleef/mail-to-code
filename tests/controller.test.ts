@@ -63,8 +63,8 @@ test('uncertain send is reconciled, never automatically resent',async()=>{
     const out=x.store.mails()[0];x.mail.record({subject:x.session().subject,text:out.text,deliveryMarker:out.deliveryMarker},'existing');x.mail.search=async()=>[{id:'existing',threadId:'canonical'}] as never;out.identityCheckedAt=undefined;x.store.saveMail(out);await x.controller.flush();assert.equal(x.store.mails()[0].status,'sent');assert.equal(attempts,1);
   }finally{await x.cleanup();}
 });
-test('history baseline skips old email; expired cursor performs bounded deduplicated backfill',async()=>{
-  const x=await setup();try{let queries=0;x.mail.search=async()=>{queries++;return [];};await x.controller.poll();assert.equal(queries,0);assert.equal(x.store.get('gmail_history'),'100');x.mail.history=async()=>{throw new GmailError(404,'expired');};await x.controller.poll();assert.equal(queries,1);assert.equal(x.store.get('gmail_history'),'100');}finally{await x.cleanup();}
+test('new mailbox establishes a baseline then searches without modifying historical cursors',async()=>{
+ const x=await setup();try{let queries=0;x.mail.search=async()=>{queries++;return [];};await x.controller.poll();assert.equal(queries,0);assert.ok(x.store.get('mail_scan_baseline'));await x.controller.poll();assert.equal(queries,1);assert.ok(x.store.get('mail_scan_success'));assert.equal(x.store.get('gmail_history'),undefined);}finally{await x.cleanup();}
 });
 test('restart preserves work and marks interrupted effects for reconciliation',async()=>{
   const x=await setup();try{x.controller.handle(message('new','task'));const s=x.session(),job=x.store.jobs()[0];job.kind='deploy';job.status='running';x.store.saveJob(job);s.state='DEPLOYING';s.deployUncertain=true;x.store.save(s);const mail=x.store.notify(s,'status','Synthetic status requested by owner');mail.status='sending';x.store.saveMail(mail);x.store.recover();assert.equal(x.session().deployUncertain,true);assert.equal(x.session().state,'FAILED');assert.equal(x.store.mails()[0].status,'uncertain');
@@ -96,7 +96,7 @@ test('CANCEL is allowed after merge, but rejected after the first production eff
   }finally{await x.cleanup();}
 });
 
-test('Deleted history messages do not pin the cursor or prevent later trusted mail',async()=>{const x=await setup();try{x.store.set('gmail_history','100');x.mail.history=async()=>({messages:[{id:'gone',threadId:'gone-thread'},{id:'live',threadId:'incoming-thread'}],cursor:'110'}) as never;x.mail.read=async(id?:string)=>{if(id==='gone')throw new GmailError(404,'deleted');const raw=Buffer.from(`From: ${config.ownerAddress}\r\nTo: ${config.gmailAddress}\r\nSubject: NEW sampleapp: live\r\nMessage-ID: <live@qq.com>\r\nAuthentication-Results: mx.google.com; dkim=pass header.d=qq.com; dmarc=pass header.from=qq.com\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nlive requirement`).toString('base64url');return {id:'live',threadId:'incoming-thread',raw};};await x.controller.poll();assert.equal(x.store.get('gmail_history'),'110');assert.equal(x.store.seen('gone'),true);assert.equal(x.store.sessions().length,1);assert.equal(x.store.jobs()[0].kind,'plan');}finally{await x.cleanup();}});
+test('unavailable raw message keeps the scan checkpoint for reconciliation',async()=>{const x=await setup();try{x.store.set('mail_scan_baseline','1');x.store.set('mail_scan_success','1');x.mail.search=async()=>[{id:'gone'}];x.mail.read=async()=>{throw Error('MAIL_PLUGIN_READ_UNAVAILABLE');};await x.controller.poll();assert.equal(x.store.get('mail_scan_success'),'1');assert.equal(x.store.seen('gone'),false);assert.equal(x.store.sessions().length,0);assert.match(x.store.get('poll_error')!,/READ_UNAVAILABLE/);}finally{await x.cleanup();}});
 
 test('New requests record progress internally while requested status and the ready plan remain deliverable',async()=>{
  const x=await setup();try{

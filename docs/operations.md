@@ -14,11 +14,24 @@ Use `scripts/service.sh` for user-service status and logs. `doctor [project]` ve
 
 Preserve the old deployment and cutover backup for 30 days. Do not delete a still-used data directory or Git repository referenced by a worktree. The old service stays disabled during retention.
 
+## Gmail transport migration
+
+Both engines use the official Codex Gmail plugin. Mail transport migration does
+not change the business engine or output mode. Follow the [mailbox cutover
+procedure](gmail-plugin-readiness.md#existing-installations): prepare a reviewed
+build, validate the dedicated server login, reach an idle stopping point, stop
+both services, back up both SQLite databases without old OAuth credentials, run
+`migrate-mail --dry-run` and `migrate-mail`, verify with `doctor`, update the service
+definition, and perform real owner-mail acceptance before cleaning credentials.
+
 ## Recovery
 
-Before the new controller performs any effects, the stopped cutover snapshot can restore the old installation. After startup, inspect processed mail, outbox and external operations first. Prefer a tested build compatible with the current database and profile format, keeping the current database. Never restore an earlier snapshot blindly, replay historical approvals, or run an older controller against v7 state.
+After plugin cutover, recovery uses the current database and a reviewed compatible
+plugin-only build. Inspect processed mail, outbox and external operations before
+repairing a connection or changing builds. Never restore an older SQLite snapshot,
+replay historical approvals or run the retired transport against live state.
 
-`reconcile-send`, `reconcile-merge` and `reconcile-deploy` resolve uncertain outcomes. Read their CLI output before retrying. `upgrade.sh` backs up and checks a reviewed revision; `rollback.sh` checks schema compatibility and never restores a database automatically. Format-specific compatibility still requires testing on a private database copy.
+`reconcile-send`, `reconcile-merge` and `reconcile-deploy` resolve uncertain outcomes. Read their CLI output before retrying. `upgrade.sh` backs up and checks a reviewed revision; `rollback.sh` rejects retired OAuth builds and never restores a database. Format-specific compatibility still requires testing on a private database copy.
 
 ## Internal progress records
 

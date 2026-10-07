@@ -1,6 +1,7 @@
 import type { Config } from './config.js';
 import { Store } from './store.js';
-import { GmailError, type GmailClient } from './gmail.js';
+import { GmailError, type MailTransport } from './mail-transport.js';
+import {scanMailbox} from './mail-scan.js';
 import { parseIncoming } from './mail.js';
 import type { Incoming, Session, Job, Outbound, Attachment } from './types.js';
 import type { RunResult } from './runner.js';
@@ -15,7 +16,7 @@ export interface Work {
   deploy(s:Session,signal:AbortSignal):Promise<void>; reconcile(s:Session):Promise<boolean>;
   productRecord?(s:Session,attachments:Attachment[]):Promise<string|undefined>;
 }
-type MailTransport=Pick<GmailClient,'profile'|'history'|'search'|'read'|'send'>;
+
 // Transport has no mail-intent parser or business fallback. The live semantic
 // controller supplies every intake and execution decision.
 export abstract class Controller {
@@ -26,23 +27,14 @@ export abstract class Controller {
   async poll() {
     if(this.polling||this.stopped)return;this.polling=true;
     try{
-      let cursor=this.store.get('gmail_history');
-      if(!cursor){const p=await this.mail.profile();if(p.emailAddress.toLowerCase()!==this.config.gmailAddress)throw new Error('Wrong Gmail mailbox');this.store.set('gmail_history',p.historyId);this.store.set('gmail_last_success',String(Date.now()));return;}
-      let refs:{id:string;threadId:string}[],next:string;
-      try{const result=await this.mail.history(cursor);refs=result.messages;next=result.cursor;}
-      catch(e){if(!(e instanceof GmailError)||e.status!==404)throw e;
-        // Capture baseline BEFORE backfill; later polls cover messages arriving during it.
-        next=(await this.mail.profile()).historyId;
-        const after=Math.floor((Number(this.store.get('gmail_last_success'))-86400000)/1000);
-        refs=await this.mail.search(`from:${this.config.ownerAddress} after:${after}`);
-      }
-      for(const ref of refs){if(this.store.seen(ref.id))continue;
-        let m;try{m=await this.mail.read(ref.id);}catch(e){if(e instanceof GmailError&&e.status===404){this.store.remember(ref.id,'',ref.threadId,undefined,'message_unavailable');continue;}throw e;}
+      await scanMailbox(this.mail,this.store,this.config.ownerAddress,async id=>{
+        if(this.store.seen(id))return;
+        const m=await this.mail.read(id);
         let incoming:Incoming;
-        try{incoming=await parseIncoming(m.id,m.threadId,m.raw,this.config.ownerAddress);}catch{this.store.remember(m.id,'',m.threadId,undefined,'invalid_mime');continue;}
+        try{incoming=await parseIncoming(m.id,m.threadId,m.raw,this.config.ownerAddress);}catch{this.store.remember(m.id,'',m.threadId,undefined,'invalid_mime');return;}
         this.handle(incoming);
-      }
-      this.store.set('gmail_history',next);this.store.set('gmail_last_success',String(Date.now()));this.store.set('poll_error','');
+      });
+      this.store.set('poll_error','');
     }catch(e){this.store.set('poll_error',safeError(e));}
     finally{this.polling=false;}
   }
@@ -55,9 +47,13 @@ export abstract class Controller {
       const mail=all.find(m=>{const previous=all.filter(p=>p.sessionId===m.sessionId&&p.status==='sent').at(-1);return m.status==='pending'&&!all.some(u=>u.sessionId===m.sessionId&&u.status==='uncertain')&&(!previous||!!previous.rfcMessageId);});if(!mail)return;
       const s=this.store.session(mail.sessionId)!;
       const previous=this.store.mails().filter(m=>m.sessionId===s.id&&m.status==='sent').at(-1);
+      if(this.mail.prepareReply&&!mail.replyMessageId){
+        const parent=previous?.gmailId||s.initialMessageId, frozen=await this.mail.prepareReply(parent,mail.attachments);
+        mail.replyMessageId=parent;mail.replyParentRfcId=frozen.rfcId;mail.replyQuoteHash=frozen.quoteHash;mail.attachmentHashes=frozen.attachmentHashes;mail.threadId=frozen.threadId;this.store.saveMail(mail);
+      }
       mail.status='sending';mail.attempts++;mail.attemptedAt=new Date().toISOString();this.store.saveMail(mail);
       try{
-        const result=await this.mail.send({to:this.config.ownerAddress,subject:s.subject,text:mail.text,summary:mail.summary,presentation:mail.presentation,messageId:mail.id,deliveryMarker:mail.deliveryMarker,threadId:s.threadId,inReplyTo:previous?.rfcMessageId||s.initialRfcId,references:this.store.mails().filter(m=>m.sessionId===s.id&&m.status==='sent'&&m.rfcMessageId).slice(-15).map(m=>m.rfcMessageId!),attachments:mail.attachments});
+        const result=await this.mail.send({replyMessageId:mail.replyMessageId,to:this.config.ownerAddress,subject:s.subject,text:mail.text,summary:mail.summary,presentation:mail.presentation,messageId:mail.id,deliveryMarker:mail.deliveryMarker,threadId:mail.threadId||s.threadId,inReplyTo:previous?.rfcMessageId||s.initialRfcId,references:this.store.mails().filter(m=>m.sessionId===s.id&&m.status==='sent'&&m.rfcMessageId).slice(-15).map(m=>m.rfcMessageId!),attachments:mail.attachments,attachmentHashes:mail.attachmentHashes});
         mail.status='sent';mail.gmailId=result.id;mail.threadId=result.threadId;mail.sentAt=new Date().toISOString();mail.identityStatus='pending';this.store.saveMail(mail);
         const current=this.store.session(s.id)!;current.threadId=result.threadId;this.store.save(current);
         try{await delivery.reconcile(mail);}catch{mail.identityStatus='pending';mail.identityError='DELIVERY_READ_PENDING';this.store.saveMail(mail);}

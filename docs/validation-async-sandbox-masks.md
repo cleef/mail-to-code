@@ -24,11 +24,11 @@ reset, historical approval replay, protocol change, or SQLite migration is neede
 
 The fixed Codex CLI 0.159.2 probe uses a disposable projects directory, sibling
 runtime-data directory and denied configuration directory with synthetic GitHub
-and OAuth tokens. It verifies:
+and dedicated mail login credentials. It verifies:
 
 - Project instructions and linked project source remain readable.
 - Original and linked checkout writes are denied.
-- Runtime database, OAuth and GitHub tokens, foreign feature state, task `.env`,
+- Runtime database, dedicated mail login and GitHub tokens, foreign feature state, task `.env`,
   Git metadata and a later-created `.key` file remain unreadable.
 - Task-worktree and task-note writes succeed.
 - The command adapter enforces the same checks.

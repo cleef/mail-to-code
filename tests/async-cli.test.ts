@@ -60,7 +60,7 @@ async function fixture(complete = false, finalMode = false) {
     const root = await mkdtemp(join(tmpdir(), 'async-test-')), config = ConfigSchema.parse({ ...(finalMode ? { engine: 'async-cli', asyncMailOutput: 'assistant-final' } : {}), gmailAddress: 'agent@example.test', ownerAddress: 'owner@example.test', dataDir: root, projectsRoot: join(root, 'projects') });
     await mkdir(config.projectsRoot);
     const store = new AsyncStore(join(root, 'async-cli.sqlite')), history = { thread: { id: 'codex-thread', turns: [] as any[] } }, clients: FakeClient[] = [], sends: any[] = [];
-    const mail: MailTransport = { profile: async () => ({ emailAddress: config.gmailAddress, historyId: 'cursor' }), history: async () => ({ messages: [], cursor: 'cursor' }), search: async () => [], read: async () => { throw Error('Unavailable'); }, send: async (input) => { sends.push(input); return { id: 'sent', threadId: 'gmail-1' }; } };
+    const mail: MailTransport = { profile: async () => ({ emailAddress: config.gmailAddress, historyId: 'cursor' }), search: async () => [], read: async () => { throw Error('Unavailable'); }, send: async (input) => { sends.push(input); return { id: 'sent', threadId: 'gmail-1' }; } };
     const bridge = new AsyncBridge(config, store, mail, async () => { const c = new FakeClient(history, complete); if (finalMode) c.finalReply = '已完成修改，检查通过。可以查看 PR。'; clients.push(c); return c; }, undefined, root);
     return { root, config, store, history, clients, sends, mail, bridge };
 }
@@ -399,13 +399,13 @@ test('unresolved reply is quarantined without stalling other inbox messages or s
         '', 'Implement the scoped synthetic task'
     ].join('\r\n')).toString('base64url');
     f.store.meta('gmail_cursor', 'before');
-    f.mail.history = async () => ({ messages: [{ id: 'unknown', threadId: 'gmail-1' }, { id: 'fresh', threadId: 'gmail-1' }], cursor: 'after' });
-    f.mail.read = async (id) => ({ id, threadId: 'gmail-1', raw: mime(id, id === 'unknown' ? '<missing@example.test>' : '') });
+    f.store.meta('mail_scan_baseline','1');f.mail.search = async () => [{id:'unknown'},{id:'fresh'}];
+    f.mail.read = async (id) => ({ id, threadId: 'gmail-1', labelIds:[], raw: mime(id, id === 'unknown' ? '<missing@example.test>' : '') });
     await f.bridge.poll();
     assert.ok(f.store.get('quarantine', 'unknown'));
     assert.ok(f.store.input('fresh'));
     assert.equal(f.store.conversations().length, 1);
-    assert.equal(f.store.meta('gmail_cursor'), 'after');
+    assert.equal(f.store.meta('gmail_cursor'), 'before');assert.ok(f.store.meta('mail_scan_success'));
     assert.equal(f.store.mails().length, 0);
     f.store.close();
 });

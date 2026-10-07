@@ -4,10 +4,12 @@
 
 Templates are kept separate from active configuration in `~/.config/mail-to-code/`.
 `init` creates `config.json` and initializes the private `AGENTS.md` and `WORKFLOW.md`
-without overwriting edited guides. Gmail OAuth credentials are downloaded as
-`oauth-client.json`; `auth` generates and refreshes `token.json`. Keep all credentials
-outside the checkout. See the [README setup guide](../README.md#setup) for the file
-roles, permissions, Gmail console steps and remote authorization.
+without overwriting edited guides. The official Gmail plugin uses an independent
+Codex home at `<configDir>/codex-mail/`, configurable with `mailCodexHome`. Run
+`mail-connect` on the service host to log in and connect Gmail via `/plugins`.
+Development keeps its existing Codex configuration and API key. Keep credentials
+outside the checkout. See the [README setup guide](../README.md#setup) for file
+roles, permissions and plugin connection steps.
 
 ```json
 {

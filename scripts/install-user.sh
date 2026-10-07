@@ -18,8 +18,6 @@ cat > "$HOME/.config/systemd/user/mail-to-code.service" <<UNIT
 Description=Email driven Codex development controller
 After=network-online.target
 ConditionPathExists=$task_config/config.json
-ConditionPathExists=$task_config/oauth-client.json
-ConditionPathExists=$task_config/token.json
 
 [Service]
 Type=simple
@@ -38,4 +36,4 @@ WantedBy=default.target
 UNIT
 systemctl --user daemon-reload
 systemctl --user enable mail-to-code.service
-printf '%s\n' 'User service installed. Run doctor and OAuth authorization before starting.'
+printf '%s\n' 'User service installed. Run mail-connect and doctor before starting.'

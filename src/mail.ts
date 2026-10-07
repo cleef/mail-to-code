@@ -28,9 +28,10 @@ export async function parseIncoming(id: string,threadId: string,raw: string,owne
   const sender=from?.length===1 ? from[0].address?.toLowerCase() || '' : '';
   const auto=String(parsed.headers.get('auto-submitted')||'no').toLowerCase()!=='no'
     || parsed.headers.has('list-id') || /bulk|list|junk/i.test(String(parsed.headers.get('precedence')||''));
-  const trusted=sender===owner.toLowerCase() && !auto && authenticated(parsed.headerLines,owner);
+  const rfcIdentity=typeof parsed.messageId==='string'&&/^<[^<>\s]+>$/.test(parsed.messageId);
+  const trusted=rfcIdentity&&sender===owner.toLowerCase() && !auto && authenticated(parsed.headerLines,owner);
   const htmlText=parsed.html ? convert(parsed.html,{wordwrap:false,selectors:[{selector:'blockquote',format:'skip'},{selector:'.gmail_quote',format:'skip'}]}) : '';
   return {id,threadId,rfcId:parsed.messageId||'',inReplyTo:parsed.inReplyTo||'',subject:parsed.subject||'',
     references:[...new Set((Array.isArray(parsed.references)?parsed.references:parsed.references?[parsed.references]:[]).flatMap(v=>v.match(/<[^<>\s]+>/g)||[]))],
-    text:cleanReply(parsed.text||htmlText),from:sender,trusted,reason:trusted?undefined:auto?'auto_reply':'sender_or_authentication'};
+    text:cleanReply(parsed.text||htmlText),from:sender,trusted,reason:trusted?undefined:!rfcIdentity?'missing_rfc_identity':auto?'auto_reply':'sender_or_authentication'};
 }

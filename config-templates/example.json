@@ -9,5 +9,6 @@
   "githubTokenFile": "~/.config/mail-to-code/github-token",
   "projectsRoot": "~/projects",
   "repositories": {},
-  "profiles": {}
+  "profiles": {},
+  "mailCodexHome": "~/.config/mail-to-code/codex-mail"
 }
