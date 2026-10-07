@@ -2,21 +2,26 @@
 
 Self-hosted, email-driven coding with Codex, human review, and approval-controlled deployment.
 
-Describe a task by email. The asynchronous engine passes it to a persistent Codex CLI conversation and returns Codex's final reply in the same mail thread. Codex discovers repositories, discusses choices and works in approved isolated worktrees. Merge and deployment require separate approval of the exact current target.
+Describe a task by email. New installations pass it to a persistent Codex CLI conversation and return Codex's final reply in the same mail thread. Codex discovers repositories, discusses choices and works in approved isolated worktrees. Merge and deployment require separate approval of the exact current target.
 
 ## Workflow
 
-**Request → Plan → START → Develop → Review → APPROVE → Merge → DEPLOY**
+**Email request → Codex conversation and implementation → Review → Separate merge and deployment confirmations**
 
-- Natural-language requests can involve multiple repositories and read-only references.
-- Discussions, staged documentation and implementation, multi-item replies, and follow-up requests remain attached to the task.
-- SQLite preserves task state, Gmail history, verified delivery identities, approval snapshots, worktrees and Codex resume contexts.
-- The controller owns email, Git, credentials and deployment. Codex cannot access controller secrets or production services.
+- New installations use the `async-cli` engine. An explicit implementation request can authorize its stated scope; Codex discusses choices and asks for missing decisions when needed. There is no required `START` loop.
+- A fresh email without reply references starts a new conversation. Replying to a known message continues its conversation across follow-ups, repository changes and service restarts.
+- Requests can include multiple repositories and read-only references. Implementation stays in approved worktrees; adding repositories or changing a reference into a write target requires explicit scope confirmation.
+- Merge and deployment each require a separate confirmation bound to the exact current target and a verified delivered request. A direct natural-language reply can confirm the proposed action; fixed command words are not required.
+- SQLite preserves mail identities, inputs, grants, operation receipts and immutable replies. Native Codex history preserves the conversation, while `FEATURE.md` records progress and decisions.
+- The controller owns email, privileged Git, credentials and external effects. Codex uses approved bridge tools; its native shell cannot access controller secrets or production credentials/networking.
 - Changes to MailToCode itself require manual review, merge and upgrade.
+
+Existing configurations without `engine` retain the `legacy` engine and its staged
+`START` / `APPROVE` / `DEPLOY` workflow. See [legacy usage](#legacy-engine-usage).
 
 ## Requirements
 
-Node.js **22.13+ (22.x)**, npm, Git, an authenticated Codex CLI with named filesystem permission support, Gmail OAuth, and repository-scoped GitHub credentials. Linux user services use systemd. Podman is required for screenshots or isolated test services.
+Node.js **22.13+ (22.x)**, npm, Git, Gmail OAuth and repository-scoped GitHub credentials. The async engine requires an authenticated **Codex CLI 0.159.2**; its app-server protocol and named filesystem permissions are validated against that version. Revalidate both before changing the CLI version. Linux user services use systemd. Podman is required when projects use screenshots or isolated test services.
 
 ## Setup
 
@@ -32,7 +37,9 @@ node dist/src/cli.js init --gmail agent@gmail.com --owner owner@example.com
 
 Replace both email addresses. `gmailAddress` is the agent's Gmail mailbox;
 `ownerAddress` is the operator's mailbox used to send requests and approvals.
-They must be different. `init` creates private configuration and guide files;
+They must be different. `init` selects `engine: "async-cli"` and
+`asyncMailOutput: "assistant-final"`, so native final replies become email.
+It creates private configuration and guide files;
 it does not overwrite an existing `config.json`. Existing installations should
 edit their private files and follow the [upgrade procedure](docs/operations.md).
 
@@ -40,15 +47,16 @@ edit their private files and follow the [upgrade procedure](docs/operations.md).
 
 [`config-templates/`](config-templates/) contains public **templates**, not your
 installation's active configuration. `init` generates `config.json` and copies
-`AGENTS.md` and `WORKFLOW.md` into `~/.config/mail-to-code/`. Installation and
-upgrades preserve guides that you have edited; there is no need to copy the
+`ASYNC_AGENTS.md`, `AGENTS.md` and `WORKFLOW.md` into `~/.config/mail-to-code/`.
+Installation and upgrades preserve guides that you have edited; there is no need to copy the
 entire template directory on each upgrade.
 
 | Private file | Purpose | How it is created |
 | --- | --- | --- |
 | `config.json` | Mailboxes, project directories and execution settings | Generated by `init`; edit for your installation |
-| `AGENTS.md` | Your project descriptions and operator conventions | Initialized from the template; editable |
-| `WORKFLOW.md` | Planning, implementation and review conventions | Initialized from the template; editable |
+| `ASYNC_AGENTS.md` | Project and operator conventions loaded by the async engine | Initialized by `init` or `async-agent-guide init`; editable |
+| `AGENTS.md` | Project and operator conventions for the legacy engine | Initialized from the template; editable |
+| `WORKFLOW.md` | Staged planning and review conventions for the legacy engine | Initialized from the template; editable |
 | `oauth-client.json` | Google Desktop OAuth client credentials | Download from Google Cloud; see below |
 | `token.json` | Gmail authorization and refresh token | Generated by `auth`; maintained automatically |
 | `github-token` | Repository-scoped GitHub credentials | Supply privately at the configured `githubTokenFile` path |
@@ -58,10 +66,17 @@ The configuration directory must have permissions `700`, and private files
 `MAIL_TO_CODE_CONFIG_DIR`, using an absolute path. If you override it, also set
 `githubTokenFile` to the location where you store your GitHub credential.
 
+Async sessions load `ASYNC_AGENTS.md`; they do not load the legacy guides.
+When upgrading an existing installation, initialize the async guide with
+`node dist/src/cli.js async-agent-guide init` and manually carry over useful
+project conventions. The command preserves an existing edited async guide.
+
 Edit `config.json` before running the service:
 
 | Setting | What to provide |
 | --- | --- |
+| `engine` | `async-cli` for new installations; an omitted field retains `legacy` |
+| `asyncMailOutput` | `assistant-final` sends native final replies and requires `async-cli`; an omitted field retains explicit `queue-mail` delivery |
 | `gmailAddress` / `ownerAddress` | Agent Gmail address and the authorized operator address |
 | `projectsRoot` | Directory containing your project repositories, default `~/projects` |
 | `githubTokenFile` | Private GitHub token file; repository write access is required |
@@ -76,6 +91,11 @@ Deployment is disabled by default and requires private settings plus a separate
 approval. See [configuration examples](docs/configuration.md) for profiles,
 previews and deployment settings. Runtime state and credentials do not belong
 in the checkout.
+
+Changing `engine` or `asyncMailOutput` is an explicit configuration change;
+upgrading the source does not enable either mode automatically. Restart the
+service after changing output mode. Follow the [cutover procedure](docs/async-cli.md#opt-in-cutover-and-rollback)
+before switching an existing legacy installation to the async engine.
 
 ### Connect Gmail
 
@@ -130,47 +150,59 @@ If authorization is revoked or expires, run `auth` again.
 
 ### Verify and start
 
-Configure GitHub credentials and your projects before the readiness check. The
-service setup below uses Linux and systemd; have an administrator enable user
-lingering before `doctor`. If
-those projects require preview screenshots, build the preview image with
-`./scripts/build-preview.sh` before running `doctor`.
-For a new installation, prepare the current SQLite schema while the service is
-stopped, then run the full check:
+Configure GitHub credentials and your projects before starting the service. The
+commands below are for a new async installation on Linux with systemd. Have an
+administrator enable user lingering so the service continues after logout.
+Build the preview image with `./scripts/build-preview.sh` if your projects need
+screenshots or isolated test services, then check readiness:
 
 ```sh
-node dist/src/cli.js migrate
-node dist/src/cli.js doctor
+node dist/src/cli.js async-doctor
 ```
 
-`doctor` checks Codex, Gmail authorization, repository access and configured
-runtimes. Start the controller only after it passes. On Linux, install and start
-the user service:
+`async-doctor` checks Node, the projects root, pinned Codex version, async guide,
+configured private operation scripts and Gmail identity/scopes. It does not
+perform the legacy repository/runtime checks; prepare the GitHub credential and
+project profiles separately. `doctor` also selects this check when
+`engine` is `async-cli`. The async database initializes when the service starts;
+the legacy `migrate` command is not required for a new async installation.
+
+Start the controller only after readiness passes. Install and start the user service:
 
 ```sh
 ./scripts/install-user.sh
 systemctl --user start mail-to-code.service
 ```
 
-User lingering keeps the service running after logout. Podman and `./scripts/build-preview.sh` are needed when your configured projects
-require screenshots or isolated test services. See [operations](docs/operations.md)
-for upgrades, backups and recovery.
+For a legacy installation, keep the service stopped, run
+`node dist/src/cli.js migrate` and `node dist/src/cli.js doctor`, then start only
+after its schema and checks pass. See [operations](docs/operations.md) for
+upgrades, backups and recovery, and the [async guide](docs/async-cli.md) for
+existing-installation cutover. A controller upgrade does not deploy its projects.
 
-## Asynchronous CLI engine (opt-in)
+## Asynchronous CLI engine
 
-The new `async-cli` engine delivers mail directly to one persistent Codex feature
-conversation starting in `~/projects` on the service host. Fresh email starts a
-new session; replies continue the original session, including after a restart.
-Work continues within approved scope;
-progress lives in `FEATURE.md`. Only the primary queues meaningful email. Merge
-and deployment remain independently confirmed. Existing installations retain
-the legacy engine. See [architecture, cutover and validation](docs/async-cli.md).
+The `async-cli` engine starts one persistent Codex feature conversation in the
+configured `projectsRoot` on the service host (default `~/projects`). Work
+continues within approved scope, and progress lives in
+`<dataDir>/async-cli/features/<feature-id>/notes/FEATURE.md`.
+
+New installations use `asyncMailOutput: "assistant-final"`: Codex's native final
+reply becomes the email in the same conversation. Commentary, reasoning and tool
+logs remain internal; no second notification is drafted. Existing async
+configurations without the output field retain `queue-mail`, where only an
+explicit `queue_mail` call sends a decision, blocker, requested status or result.
+See [final replies and confirmations](docs/final-replies.md) and
+[architecture, cutover and validation](docs/async-cli.md).
 
 Administrator-configured [controlled operations](docs/controlled-operations.md)
 let the async controller run trusted inspection/backup scripts over SSH or another
 transport. Scripts and credentials stay private; Codex chooses only configured
 operations. Deployment can require verified prerequisites before its trusted
 script runs. This feature is disabled until an administrator configures it.
+Receipts retain verified backups and bounded deployment stage events; raw
+diagnostics stay private. An uncertain effect requires operator inspection and
+reconciliation before further writes, including after a controller upgrade.
 
 ## Legacy engine usage
 
