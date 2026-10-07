@@ -2,6 +2,8 @@ import { readFile, writeFile, rename, stat, mkdir, chmod } from 'node:fs/promise
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import {checkMailPlugin} from './mail-connect.js';
+import type {Config} from './config.js';
 import { ConfigSchema, configDir, expand, privateFile } from './config.js';
 import { acquireLease } from './lease.js';
 import { execute } from './process.js';
@@ -13,7 +15,7 @@ export async function assertMailServicesStopped(){
         }
     }
 }
-export async function migrateMail(dryRun: boolean, checkStopped: () => Promise<void> = assertMailServicesStopped) {
+export async function migrateMail(dryRun: boolean, checkStopped: () => Promise<void> = assertMailServicesStopped, checkConnection: (config:Config)=>Promise<{ok:boolean;code?:string}> = checkMailPlugin) {
     const path=join(configDir(),'config.json');await privateFile(path);
     const raw=JSON.parse(await readFile(path,'utf8')), next={...raw};delete next.oauthPort;
     next.mailCodexHome ||= join(configDir(),'codex-mail');
@@ -49,6 +51,7 @@ export async function migrateMail(dryRun: boolean, checkStopped: () => Promise<v
         const report={backup:undefined as string|undefined,dryRun,configChanged:JSON.stringify(next)!==JSON.stringify(raw),databases:plans.map(({name,baseline,existing,blockers})=>({name,baseline,alreadyMigrated:existing,blockers})),replayed:0,oauthCredentialsRemoved:false};
         if(dryRun)return report;
         if(plans.some(p=>p.blockers.length))throw Error('MAIL_MIGRATION_IN_FLIGHT_OR_UNCERTAIN_EFFECTS_RECONCILE_FIRST');
+        const readiness=await checkConnection(config);if(!readiness.ok)throw Error(readiness.code||'MAIL_GMAIL_DIRECT_CALL_UNAVAILABLE');
         const backup=join(dataDir,'backups','mail-plugin-'+new Date().toISOString().replace(/[:.]/g,'-'));await mkdir(backup,{recursive:true,mode:0o700});
         for(const plan of plans){
             const db=new DatabaseSync(join(dataDir,plan.name));try{

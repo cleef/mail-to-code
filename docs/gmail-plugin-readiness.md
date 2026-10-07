@@ -76,6 +76,7 @@ existing service. Do not remove credentials while that service still needs them.
    Git refs, attachments and development session files separately.
 3. Run `migrate-mail --dry-run`, inspect the baseline and blockers, then
    `migrate-mail`. These commands acquire the same exclusive dataDir lease.
+   A real migration rechecks the direct-call connection before writing state.
    They remove `oauthPort`, configure the independent mail home and add search
    checkpoints. The async baseline retains `started_at`; historical cursor,
    inbox, rejected, quarantine, outbox and task records are not rewritten.
