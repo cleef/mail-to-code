@@ -1,5 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
+import { prepareMailBody } from './mail-images.js';
 import type { Incoming, Outbound } from './types.js';
 export interface Conversation {
     id: string;
@@ -50,7 +52,7 @@ export interface Operation {
 export class AsyncStore {
     readonly db: DatabaseSync;
     private transactionDepth = 0;
-    constructor(path: string, readOnly = false) {
+    constructor(readonly path: string, readOnly = false) {
         this.db = new DatabaseSync(path, { readOnly });
         if (readOnly) {
             this.db.exec('PRAGMA busy_timeout=5000');
@@ -88,7 +90,17 @@ export class AsyncStore {
             value: string;
         }[]).map(r => JSON.parse(r.value));
     }
-    put(kind: string, id: string, value: unknown) { this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET value=excluded.value').run(kind, id, JSON.stringify(value)); }
+    put(kind: string, id: string, value: unknown) {
+        if(kind==='request') {
+            const previous=this.get<ApprovalRequest>(kind,id),next=value as ApprovalRequest;
+            if(previous?.mailId && ['kind','target','mailId'].some(k=>JSON.stringify((previous as any)[k])!==JSON.stringify((next as any)[k])))throw Error('IMMUTABLE_CONFIRMATION_TARGET');
+        }
+        if(kind==='mail-request') {
+            const previous=this.get(kind,id);
+            if(previous!==undefined && JSON.stringify(previous)!==JSON.stringify(value))throw Error('IMMUTABLE_CONFIRMATION_TARGET');
+        }
+        this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET value=excluded.value').run(kind, id, JSON.stringify(value));
+    }
     remove(kind: string, id: string) { this.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind, id); }
     meta(key: string, value?: string) {
         if (value !== undefined)
@@ -121,8 +133,9 @@ export class AsyncStore {
     mails() { return this.all<Outbound>('mail'); }
     saveMail(m: Outbound) {
         const previous = this.mail(m.id);
+        if(previous?.replySourceId && previous.replySourceId!==m.replySourceId)throw Error('IMMUTABLE_REPLY_PARENT_SNAPSHOT');
         if(previous?.replyMessageId&&['replyMessageId','replyParentRfcId','replyQuoteHash','attachmentHashes'].some(key=>JSON.stringify((previous as any)[key])!==JSON.stringify((m as any)[key])))throw Error('IMMUTABLE_REPLY_PARENT_SNAPSHOT');
-        if (previous && (previous.text !== m.text || JSON.stringify(previous.attachments) !== JSON.stringify(m.attachments)))
+        if (previous && (previous.text !== m.text || JSON.stringify(previous.attachments) !== JSON.stringify(m.attachments) || JSON.stringify(previous.bodySnapshot)!==JSON.stringify(m.bodySnapshot) || previous.attachmentHashes && JSON.stringify(previous.attachmentHashes)!==JSON.stringify(m.attachmentHashes)))
             throw Error('IMMUTABLE_MAIL_SNAPSHOT');
         this.put('mail', m.id, m);
     }
@@ -184,7 +197,9 @@ export class AsyncStore {
                     throw Error('MAIL_KEY_REUSED_WITH_DIFFERENT_CONTENT');
                 return { mail: old, request: this.all<ApprovalRequest>('request').find(r => r.mailId === old.id) };
             }
-            const id = randomUUID(), mail: Outbound = { id, sessionId: c.id, kind: 'agent', text, attachments: [], status: 'pending', createdAt: new Date().toISOString(), attempts: 0, deliveryMarker: id };
+            const frozen=prepareMailBody(dirname(this.path),c.id,text);
+            const inputs=this.inputs().filter(e=>e.conversationId===c.id),parent=inputs.filter(e=>e.status==='accepted').at(-1)||inputs.at(-1);
+            const id = randomUUID(), mail: Outbound = { id, sessionId: c.id, kind: 'agent', text, ...frozen, replySourceId:parent?.id, status: 'pending', createdAt: new Date().toISOString(), attempts: 0, deliveryMarker: id };
             this.saveMail(mail);
             this.put('mail-key', dedupId, id);
             this.put('mail-request', id, request || null);

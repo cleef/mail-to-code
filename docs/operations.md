@@ -26,6 +26,15 @@ definition, and perform real owner-mail acceptance before cleaning credentials.
 
 ## Recovery
 
+For the reviewed inline-image/automatic-reply upgrade, follow the
+[image rollout checklist](final-replies.md#reviewed-rollout). Back up and stop at
+an idle point, keep the existing runtime directories, explicitly select
+`assistant-final` and restart one service. Historical final messages are not
+backfilled. Image preparation errors appear in `async-status` and `doctor`;
+request a corrected new final reply instead of replaying its original turn.
+Do not finish old OAuth cleanup until real image-mail and thread-continuation
+acceptance passes. The mail output change grants no merge/deployment permission.
+
 After plugin cutover, recovery uses the current database and a reviewed compatible
 plugin-only build. Inspect processed mail, outbox and external operations before
 repairing a connection or changing builds. Never restore an older SQLite snapshot,

@@ -193,6 +193,16 @@ explicit `queue_mail` call sends a decision, blocker, requested status or result
 See [final replies and confirmations](docs/final-replies.md) and
 [architecture, cutover and validation](docs/async-cli.md).
 
+**Image replies:** Codex can generate or copy PNG/JPEG files into the current
+task's `notes/mail-images/` directory and reference them with
+`![Preview](mail-images/preview.png)` in its final reply. The controller freezes
+the actual bytes before queuing mail, renders images inline with CID MIME parts,
+and leaves the files available for saving in the mail client. Both assistant-final
+and existing queue-mail threads support this convention. Total image size is
+limited to 10 MiB. Invalid files hold the reply with a visible diagnostic; they
+are never replaced by a filename-only success message. See the
+[image rules and rollout checklist](docs/final-replies.md#image-replies).
+
 Administrator-configured [controlled operations](docs/controlled-operations.md)
 let the async controller run trusted inspection/backup scripts over SSH or another
 transport. Scripts and credentials stay private; Codex chooses only configured

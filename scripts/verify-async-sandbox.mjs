@@ -13,6 +13,8 @@ const command=process.env.ASYNC_CODEX_COMMAND||'codex';
 assert.equal((await execute(command,['--version'])).stdout.trim(),`codex-cli ${ASYNC_CODEX_VERSION}`);
 const root=await realpath(await mkdtemp(join(tmpdir(),'mail-async-sandbox-'))),projectsRoot=join(root,'projects'),dataDir=join(root,'state'),c={id:'primary'},directory=join(dataDir,'async-cli/features',c.id),worktree=join(directory,'worktrees','demo'),notes=join(directory,'notes'),foreign=join(dataDir,'async-cli/features','foreign');
 await Promise.all([mkdir(projectsRoot,{recursive:true}),mkdir(worktree,{recursive:true}),mkdir(notes,{recursive:true}),mkdir(join(directory,'input'),{recursive:true}),mkdir(foreign,{recursive:true})]);
+const images=join(notes,'mail-images'),frozen=join(dataDir,'artifacts','mail-images','frozen.png');
+await mkdir(images,{recursive:true});await mkdir(join(dataDir,'artifacts','mail-images'),{recursive:true});await writeFile(frozen,'synthetic frozen image',{mode:0o400});
 const linked=join(root,'linked-repository');await mkdir(linked);await mkdir(join(linked,'.git'));await writeFile(join(linked,'README.md'),'linked source');await symlink(linked,join(projectsRoot,'linked'));
 const configDirectory=join(root,'config');await mkdir(configDirectory);process.env.MAIL_TO_CODE_CONFIG_DIR=configDirectory;
 const effectLogs=join(dataDir,'effect-logs','synthetic');await mkdir(effectLogs,{recursive:true});const effectLog=join(effectLogs,'stderr.log');
@@ -24,7 +26,10 @@ await Promise.all([writeFile(source,'original'),writeFile(db,'synthetic runtime 
 const config=ConfigSchema.parse({engine:'async-cli',gmailAddress:'agent@example.test',ownerAddress:'owner@example.test',projectsRoot,dataDir,codexCommand:command,githubTokenFile:token,repositories:{sample:{path:linked,github:'example-org/sample',operations:{inspect:{description:'Synthetic inspect',target:'synthetic-staging',effect:'read',script:operationScript}}}}});
 const probe=`const fs=require('node:fs');const paths=JSON.parse(process.argv[1]);let results={linkedProjectRead:fs.readFileSync(paths.linked,'utf8')==='linked source',instructionsRead:fs.readFileSync(paths.agents,'utf8').startsWith('Synthetic sandbox instructions:')};for(const [key,path]of Object.entries(paths.readDeny)){try{fs.readFileSync(path);results[key]=false;}catch{results[key]=true;}}for(const [key,path]of Object.entries(paths.writeDeny)){try{fs.writeFileSync(path,'changed');results[key]=false;}catch{results[key]=true;}}fs.writeFileSync(paths.allowed,'allowed');fs.writeFileSync(paths.allowedWorktree,'allowed');results.taskWorktreeWrite=true;process.stdout.write(JSON.stringify(results));`;
 const input={readDeny:{database:db,secret,token,mailAuth,effectLog,foreign:join(foreign,'FEATURE.md'),gitMetadata:git,operationScript},writeDeny:{originalCheckout:source,linkedCheckout:join(projectsRoot,'linked/README.md'),gitMetadataWrite:git,operationScriptWrite:operationScript},allowed:join(notes,'probe.txt'),allowedWorktree:join(worktree,'probe.ts'),agents,linked:join(projectsRoot,'linked/README.md')};
+input.readDeny.frozenImage=frozen;input.writeDeny.frozenImageWrite=frozen;input.allowed=join(images,'preview.png');
 const policy=asyncPolicy(config,c);
+const futureFrozen=join(dataDir,'artifacts','mail-images','future.png');
+await writeFile(futureFrozen,'synthetic later image',{mode:0o600});input.readDeny.futureFrozenImage=futureFrozen;input.writeDeny.futureFrozenImageWrite=futureFrozen;
 // A future secret must also be denied after the policy has been generated.
 await writeFile(futureSecret,'synthetic future secret');input.readDeny.futureSecret=futureSecret;
 await writeFile(effectLog,'synthetic private diagnostic created after policy generation');

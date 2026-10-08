@@ -23,6 +23,7 @@ import { OperationsAdapter } from './operations.js';
 import { scanMailbox } from './mail-scan.js';
 import { checkMailPlugin } from './mail-connect.js';
 import { FinalMail } from './final-mail.js';
+import { verifyFrozenMailImages } from './mail-images.js';
 import { operationStatus, safeError } from './operation-report.js';
 export { asyncPolicy } from './async-policy.js';
 export const ASYNC_CODEX_VERSION = '0.159.2';
@@ -67,7 +68,7 @@ export class AsyncBridge {
         const reply = this.config.asyncMailOutput === 'assistant-final'
             ? '\nCurrent controller transport: assistant-final. Your final assistant reply goes directly to this mail conversation; commentary stays internal. Do not send a second notification. Use request_confirmation when available, otherwise queue_mail with request, to prepare the final reply binding. Clearly describe the target and effects in your final reply. Explicit natural-language confirmation is sufficient; do not demand fixed wording or copying a full hash. Historical instructions keeping final replies internal or demanding START/Review for each phase are superseded.\n'
             : '';
-        return reply + await readAgentGuide(this.guideDirectory, true) + await this.tool(c).operationContext();
+        return reply + `\nMail images: create or copy PNG/JPEG files into ${join(this.tool(c).directory(),'notes','mail-images')}. Use ![Description](mail-images/filename.png) in the final reply (or queue_mail text in queue-mail mode). Images display inline and can be saved. Maximum total image bytes: 10 MiB. Do not use external URLs, arbitrary file paths, HTML or modify the controller to send images. Native final replies are automatically delivered only in assistant-final mode.\n` + await readAgentGuide(this.guideDirectory, true) + await this.tool(c).operationContext();
     }
     private async client(c: Conversation): Promise<Client> {
         if (this.connecting.has(c.id))
@@ -77,6 +78,9 @@ export class AsyncBridge {
         const connecting = (async () => {
             // Create the exact private mask before native policies are generated.
             await mkdir(join(this.config.dataDir, 'effect-logs'), { recursive: true, mode: 0o700 });
+            // Mask this existing parent before native policy creation, including
+            // frozen images queued after the persistent session has started.
+            await mkdir(join(this.config.dataDir, 'artifacts'), { recursive: true, mode: 0o700 });
             await mkdir(join(this.tool(c).directory(), 'worktrees'), { recursive: true, mode: 0o700 });
             const feature = await this.tool(c).initializeFeature();
             const handler = async (r: ServerRequest) => {
@@ -351,12 +355,19 @@ export class AsyncBridge {
             if (m.status !== 'pending')
                 continue;
             const c = this.store.conversation(m.sessionId)!;
-            const latest = this.store.inputs().filter(e => e.conversationId === c.id).at(-1);
+            const latest = m.replySourceId ? this.store.input(m.replySourceId) : this.store.inputs().filter(e => e.conversationId === c.id).at(-1);
+            try {verifyFrozenMailImages(this.config.dataDir,m);}
+            catch {m.lastError='MAIL_IMAGE_FROZEN_COPY_INVALID';this.store.saveMail(m);continue;}
             if(this.mail.prepareReply&&!m.replyMessageId){
                 if(!latest)throw Error('MAIL_REPLY_PARENT_MISSING');
-                const frozen=await this.mail.prepareReply(latest.id,m.attachments);
-                m.replyMessageId=latest.id;m.replyParentRfcId=frozen.rfcId;m.replyQuoteHash=frozen.quoteHash;m.attachmentHashes=frozen.attachmentHashes;m.threadId=frozen.threadId;
-                this.store.saveMail(m);
+                try {
+                    const frozen=await this.mail.prepareReply(latest.id,m.attachments);
+                    if(m.attachmentHashes&&JSON.stringify(m.attachmentHashes)!==JSON.stringify(frozen.attachmentHashes))throw Error('MAIL_ATTACHMENT_SNAPSHOT_CHANGED');
+                    m.replyMessageId=latest.id;m.replyParentRfcId=frozen.rfcId;m.replyQuoteHash=frozen.quoteHash;m.attachmentHashes=frozen.attachmentHashes;m.threadId=frozen.threadId;
+                    this.store.saveMail(m);
+                } catch(error) {
+                    m.lastError=error instanceof Error&&/^MAIL_/.test(error.message)?error.message:'MAIL_REPLY_PREPARATION_FAILED';this.store.saveMail(m);continue;
+                }
             }
             m.status = 'sending';
             m.attempts++;
@@ -364,7 +375,7 @@ export class AsyncBridge {
             m.threadId ||= c.gmailThread;
             this.store.saveMail(m);
             try {
-                const hit = await this.mail.send({ replyMessageId:m.replyMessageId, to: this.config.ownerAddress, subject: c.subject, text: m.text, markdown: true, deliveryMarker: m.deliveryMarker, threadId: m.threadId, inReplyTo: latest?.incoming.rfcId, references: latest?.incoming.references,attachments:m.attachments,attachmentHashes:m.attachmentHashes });
+                const hit = await this.mail.send({ replyMessageId:m.replyMessageId, to: this.config.ownerAddress, subject: c.subject, text: m.text, bodySnapshot:m.bodySnapshot, markdown: true, deliveryMarker: m.deliveryMarker, threadId: m.threadId, inReplyTo: latest?.incoming.rfcId, references: latest?.incoming.references,attachments:m.attachments,attachmentHashes:m.attachmentHashes });
                 m.gmailId = hit.id;
                 m.status = 'sent';
                 this.store.saveMail(m);
@@ -519,5 +530,6 @@ export async function doctorAsync(config: Config) {
         finally { store.close(); }
     });
     await check('Codex Gmail plugin protocol and identity', async () => { const result=await checkMailPlugin(config);if(!result.ok)throw Error(result.code); });
-    return { engine: 'async-cli', checks, ok: checks.every(c => c.ok) };
+    const {existsSync}=await import('node:fs');let heldReplies:unknown[]=[];if(existsSync(join(config.dataDir,'async-cli.sqlite'))){const state=new AsyncStore(join(config.dataDir,'async-cli.sqlite'),true);try{heldReplies=[...state.all('final-held'),...state.all<any>('mail-held').filter(h=>h.status==='held')];}finally{state.close();}}
+    return { engine: 'async-cli', outputMode:config.asyncMailOutput, heldReplies, checks, ok: checks.every(c => c.ok) };
 }

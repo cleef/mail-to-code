@@ -222,8 +222,16 @@ export class AsyncTools {
                 return { requestId: prepared?.id, target: prepared?.target, status: 'awaiting_final_response' };
             }
             if (name === 'request_confirmation') throw Error('ASSISTANT_FINAL_MODE_REQUIRED');
-            const queued = this.store.queue(this.conversation, a.key, a.text, proposed);
-            return { mailId: queued.mail.id, requestId: queued.request?.id, status: queued.mail.status };
+            const heldId=this.conversation.id+':'+a.key;
+            try {
+                const queued = this.store.queue(this.conversation, a.key, a.text, proposed);
+                const held=this.store.get<any>('mail-held',heldId);
+                if(held)this.store.put('mail-held',heldId,{...held,status:'resolved',mailId:queued.mail.id});
+                return { mailId: queued.mail.id, requestId: queued.request?.id, status: queued.mail.status };
+            } catch(error) {
+                if(error instanceof Error && /^MAIL_(?:IMAGE_|ATTACHMENTS_|BODY_)/.test(error.message))this.store.put('mail-held',heldId,{conversationId:this.conversation.id,key:a.key,status:'held',reason:error.message});
+                throw error;
+            }
         }
         if (name === 'record_authorization')
             return this.store.authorize(this.conversation.id, a.requestId, a.sourceMailId, a.evidence);
@@ -419,7 +427,7 @@ export class AsyncTools {
     }
     async initializeFeature() {
         const notes = join(this.directory(), 'notes');
-        await Promise.all(['notes', 'input', 'worktrees'].map(name => mkdir(join(this.directory(), name), { recursive: true, mode: 0o700 })));
+        await Promise.all(['notes', 'notes/mail-images', 'input', 'worktrees'].map(name => mkdir(join(this.directory(), name), { recursive: true, mode: 0o700 })));
         const path = join(notes, 'FEATURE.md');
         try {
             await stat(path);

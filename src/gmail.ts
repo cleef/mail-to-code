@@ -84,8 +84,13 @@ export class CodexGmailTransport implements MailTransport {
         if(input.attachmentHashes&&JSON.stringify(input.attachmentHashes)!==JSON.stringify(hashes))throw Error('MAIL_ATTACHMENT_SNAPSHOT_CHANGED');
         if (input.presentation) { verifyPresentation(input.presentation, input.summary, attachments); if (input.text !== input.presentation.text) throw Error('MAIL_TEXT_SNAPSHOT_MISMATCH'); }
         const escape = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
-        const marker = input.deliveryMarker ? `\n\n[MAIL-REF: ${input.deliveryMarker}]` : '', text = input.text + marker;
-        const html = input.markdown ? markdownHtml(text) : input.presentation ? input.presentation.html + (marker ? `<p>${escape(marker.trim())}</p>` : '') : (input.summary ? summaryHtml(input.summary) : '') + `<div style="white-space:pre-wrap">${escape(input.summary && text.startsWith(summaryText(input.summary)) ? text.slice(summaryText(input.summary).length) : text)}</div>` + attachments.filter(a => a.cid).map(a => `<p>${escape(a.filename)}</p><img src="cid:${escape(a.cid!)}">`).join('');
+        if(input.bodySnapshot) {
+            const images=attachments.map((a,n)=>({cid:a.cid,filename:a.filename,contentType:a.contentType,sha256:hashes[n]}));
+            if(input.bodySnapshot.version!==1 || JSON.stringify(images)!==JSON.stringify(input.bodySnapshot.images))throw Error('MAIL_BODY_IMAGE_SNAPSHOT_MISMATCH');
+        }
+        const marker = input.deliveryMarker ? `\n\n[MAIL-REF: ${input.deliveryMarker}]` : '', text = (input.bodySnapshot?.text ?? input.text) + marker;
+        const legacyImages=new Map(attachments.filter(a=>a.cid).map(a=>['cid:'+a.cid,{cid:a.cid!,alt:a.filename}]));
+        const html = input.bodySnapshot ? input.bodySnapshot.html + (marker ? `<p>${escape(marker.trim())}</p>` : '') : input.markdown ? markdownHtml(text,legacyImages) + attachments.filter(a=>a.cid&&!input.text.includes('](cid:'+a.cid+')')).map(a=>`<img src="cid:${escape(a.cid!)}" alt="${escape(a.filename)}" style="max-width:100%;height:auto">`).join('') : input.presentation ? input.presentation.html + (marker ? `<p>${escape(marker.trim())}</p>` : '') : (input.summary ? summaryHtml(input.summary) : '') + `<div style="white-space:pre-wrap">${escape(input.summary && text.startsWith(summaryText(input.summary)) ? text.slice(summaryText(input.summary).length) : text)}</div>` + attachments.filter(a => a.cid).map(a => `<p>${escape(a.filename)}</p><img src="cid:${escape(a.cid!)}">`).join('');
         let payload: any = { mime_type: 'multipart/alternative', parts: [{ mime_type: 'text/plain', body: { content: text } }, { mime_type: 'text/html', body: { content: html } }] };
         const inline = parts.filter(p => p.content_id), files = parts.filter(p => !p.content_id);
         if (inline.length) payload = { mime_type: 'multipart/related', parts: [payload, ...inline] };

@@ -34,17 +34,22 @@ export interface ReplyRecord {id:string;source:string;stageId?:string;item:Reply
 export interface MailSummary {feature:string;rows:{phase:string;status:string;current:boolean;deliveries:{label:string;url?:string}[]}[];}
 export interface ScopeChange {reason:string;changes:string[];}
 export interface Job { id: string; sessionId: string; stageId?:string; kind: JobKind; feedback: string; scopeChange?:ScopeChange; reply?:ReplyContext; status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'; }
-export interface Attachment { path: string; filename: string; cid?: string; }
+export interface Attachment { path: string; filename: string; cid?: string; contentType?: 'image/png' | 'image/jpeg'; }
+export interface MailBodySnapshot {
+  version: 1; text: string; html: string;
+  images: {cid:string;filename:string;contentType:'image/png'|'image/jpeg';sha256:string}[];
+}
 export type MailBlock = {kind:'paragraph';title?:string;text:string} | {kind:'table';title:string;headers:string[];rows:string[][]} | {kind:'image';cid:string;caption:string};
 export interface MailPresentation {version:1;configuration?:{project:string;role:string;sources:string[];services:string[];deployment?:string}[];blocks:MailBlock[];text:string;html:string;}
 export interface Outbound {
   scopeChange?:ScopeChange;
   stageId?:string;
   id: string; sessionId: string; kind: string; text: string; attachments: Attachment[];
+  bodySnapshot?: MailBodySnapshot;
   status: 'pending' | 'sending' | 'sent' | 'uncertain' | 'failed'; gmailId?: string; threadId?: string;
   createdAt: string; lastError?: string; attempts: number;
   rfcMessageId?:string; identityCheckedAt?:string; identityError?:string; sentAt?:string; attemptedAt?:string; identityStatus?:'pending'|'verified'|'failed'; deliveryMarker?:string; approvalBinding?:ApprovalBinding;
-  replyMessageId?:string; replyParentRfcId?:string; replyQuoteHash?:string; attachmentHashes?:string[];
+  replySourceId?:string; replyMessageId?:string; replyParentRfcId?:string; replyQuoteHash?:string; attachmentHashes?:string[];
   summary?:MailSummary; questions?:MailQuestion[]; presentation?:MailPresentation;
 }
 export interface Incoming { id: string; threadId: string; rfcId: string; inReplyTo: string; references?:string[]; subject: string; text: string; from: string; trusted: boolean; reason?: string; }
