@@ -7,7 +7,9 @@ import { projectLocations } from './async-projects.js';
 export function asyncPolicy(config: Config, c: Conversation) {
     const directory = join(config.dataDir, 'async-cli', 'features', c.id), worktrees = join(directory, 'worktrees'), notes = join(directory, 'notes');
     const locations = projectLocations(config);
-    const entries: Record<string, string> = { [worktrees]: 'write', [notes]: 'write', [join(directory, 'input')]: 'read', [join(worktrees, '**/.git')]: 'deny', [join(worktrees, '**/.codex')]: 'deny', [join(worktrees, '**/.agents')]: 'deny', [join(worktrees, '**/.env')]: 'deny', [join(worktrees, '**/.env.*')]: 'deny', [join(worktrees, '**/*.pem')]: 'deny', [join(worktrees, '**/*.key')]: 'deny', [join(worktrees, '**/.npmrc')]: 'deny', [join(expand('~/.codex'), 'auth.json')]: 'deny', [expand('~/.ssh')]: 'deny', [expand('~/.aws')]: 'deny', [expand('~/.netrc')]: 'deny' };
+    // Mask artifacts directly: the pinned Linux helper cannot safely mount a
+    // denied dataDir parent with writable nested task roots.
+    const entries: Record<string, string> = { [join(config.dataDir,'artifacts')]: 'deny', [worktrees]: 'write', [notes]: 'write', [join(directory, 'input')]: 'read', [join(worktrees, '**/.git')]: 'deny', [join(worktrees, '**/.codex')]: 'deny', [join(worktrees, '**/.agents')]: 'deny', [join(worktrees, '**/.env')]: 'deny', [join(worktrees, '**/.env.*')]: 'deny', [join(worktrees, '**/*.pem')]: 'deny', [join(worktrees, '**/*.key')]: 'deny', [join(worktrees, '**/.npmrc')]: 'deny', [join(expand('~/.codex'), 'auth.json')]: 'deny', [expand('~/.ssh')]: 'deny', [expand('~/.aws')]: 'deny', [expand('~/.netrc')]: 'deny' };
     if (config.githubTokenFile)
         entries[config.githubTokenFile] = 'deny';
     entries[join(config.dataDir, 'operation-locks')] = 'deny';

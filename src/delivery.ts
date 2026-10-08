@@ -10,8 +10,8 @@ const body=(text:string)=>text.replace(/\r\n/g,'\n').trim();
 export class Delivery {
  constructor(readonly config:Config,readonly store:Store,readonly mail:MailTransport){}
  async inspect(m:Outbound,s:Session,id:string){
-  const raw=await this.mail.read(id),p=await simpleParser(Buffer.from(raw.raw,'base64url'));
-  const expected=m.text+(m.deliveryMarker?`\n\n[MAIL-REF: ${m.deliveryMarker}]`:'');
+  const raw=await this.mail.read(id),p=await simpleParser(Buffer.from(raw.raw,'base64url'),{keepCidLinks:true});
+  const expected=(m.bodySnapshot?.text ?? m.text)+(m.deliveryMarker?`\n\n[MAIL-REF: ${m.deliveryMarker}]`:'');
   const from=p.from?.value,to=p.to?(Array.isArray(p.to)?p.to.flatMap(v=>v.value):p.to.value):[];
   if(!raw.labelIds?.includes('SENT')||from?.length!==1||from[0].address?.toLowerCase()!==this.config.gmailAddress||to.length!==1||to[0].address?.toLowerCase()!==this.config.ownerAddress||p.cc||p.bcc||p.subject!==s.subject||!matchesFrozenBody(p.text||'',expected,m.replyQuoteHash))throw Error('DELIVERY_CANDIDATE_MISMATCH');
   if(m.replyParentRfcId&&p.inReplyTo!==m.replyParentRfcId)throw Error('DELIVERY_REPLY_PARENT_MISMATCH');
@@ -19,6 +19,11 @@ export class Delivery {
   const names=(values:{filename?:string;cid?:string;contentId?:string}[])=>values.map(a=>[a.filename||'',(a.cid||a.contentId||'').replace(/^<|>$/g,'')]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
   if(JSON.stringify(names(p.attachments))!==JSON.stringify(names(m.attachments)))throw Error('DELIVERY_ATTACHMENTS_MISMATCH');
   if(m.attachmentHashes){const expected=m.attachments.map((a,n)=>[a.filename,(a.cid||'').replace(/^<|>$/g,''),m.attachmentHashes![n]]).sort(),actual=p.attachments.map(a=>[a.filename||'',(a.cid||a.contentId||'').replace(/^<|>$/g,''),createHash('sha256').update(a.content).digest('hex')]).sort();if(JSON.stringify(expected)!==JSON.stringify(actual))throw Error('DELIVERY_ATTACHMENT_CONTENT_MISMATCH');}
+  if(m.bodySnapshot?.images.length){
+   const html=typeof p.html==='string'?p.html:'',refs=[...html.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi)].map(v=>v[1]);
+   if(m.bodySnapshot.images.some(image=>!refs.includes('cid:'+image.cid)) || refs.some(src=>!src.startsWith('cid:')||!m.bodySnapshot!.images.some(image=>'cid:'+image.cid===src)))throw Error('DELIVERY_IMAGE_HTML_MISMATCH');
+   for(const image of m.bodySnapshot.images){const a=p.attachments.find(a=>(a.cid||a.contentId||'').replace(/^<|>$/g,'')===image.cid),declared=a?.headers.get('content-type');if(!a || a.contentType!==image.contentType || !declared || typeof declared!=='object' || !('value' in declared) || declared.value!==image.contentType)throw Error('DELIVERY_IMAGE_MIME_MISMATCH');}
+  }
   if(!p.messageId||!/^<[^<>\s]+>$/.test(p.messageId))throw Error('DELIVERY_RFC_ID_MISSING');
   return {id:raw.id,threadId:raw.threadId,rfcMessageId:p.messageId,sentAt:raw.internalDate?new Date(Number(raw.internalDate)).toISOString():p.date?.toISOString()};
  }

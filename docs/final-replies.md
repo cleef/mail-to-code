@@ -18,6 +18,69 @@ reads native history without rerunning user input; interrupted continuations kee
 the original reply identity. Uncertain email sends use the existing RFC verifier,
 never automatic resending.
 
+## Image replies
+
+Each async task has its own writable directory:
+`<dataDir>/async-cli/features/<feature-id>/notes/mail-images/`. Generate an image
+there or copy an existing screenshot into it, then use Markdown:
+
+```md
+![Preview](mail-images/preview.png)
+![Second view](<mail-images/second view.jpg>)
+```
+
+PNG, JPG and JPEG extensions must match a decodable PNG or JPEG. All images
+together may occupy at most **10 MiB**. PNG decoding is limited to 16 megapixels
+and 16,384 pixels per dimension; JPEG decoding is limited to 16 megapixels and
+bounded decoder memory. A safe absolute path inside the same image directory is
+accepted for older threads; relative references are preferred. Missing files,
+symlinks, hard links, path traversal, other tasks' files, disguised formats and
+external/data URLs are rejected. References inside backtick code examples are
+literal examples, not attachments. Arbitrary HTML and unrelated file attachments
+are not supported by this convention.
+
+Both native final replies and queue_mail text use the same importer. No additional
+dynamic tool is required by older threads. The original final wording remains
+stored for audit. The queued snapshot separately freezes plain text (image caption
+and filename), escaped HTML with `cid:` references, image filenames, types and
+SHA-256 hashes. Server paths are removed from rendered image references.
+Controller-owned artifacts are copied as private read-only files before queuing;
+native tools cannot read or modify them. MIME delivery uses multipart/alternative
+inside multipart/related, so the HTML displays the image and the mail client can
+save its MIME part.
+
+Invalid images create a held diagnostic rather than a partial or fabricated
+email. Inspect `async-status` for conversation errors, outbox `lastError` and image
+metadata/hashes;
+`doctor` includes `heldReplies`. Correct the file and request a **new** reply
+in the original mail thread; duplicate events and restarts do not retry a held
+final answer. Once queued, body, images, confirmation target and reply-parent
+message selection cannot be changed. A changed frozen file blocks sending.
+Actual sent raw MIME must match the recipient, thread, RFC reply parent, text,
+CID references, declared image types, filenames and hashes before a confirmation
+can be used. An unclear send remains uncertain and is never automatically resent.
+
+### Reviewed rollout
+
+1. Review and merge the feature PR manually. Prepare the reviewed build, check
+   active turns, queued mail and uncertain effects, then stop at an idle point.
+2. Back up both SQLite databases consistently (including WAL state), private
+   configuration and required recovery files. Keep current dataDir, worktrees,
+   artifacts and development Codex history.
+3. Install the reviewed build. Explicitly set `asyncMailOutput: "assistant-final"`
+   in the private config and restart the single controller. Do not overwrite
+   edited guides or regenerate old mail/approval snapshots.
+4. Reply to the original image-test thread and request a visibly colored 640×360
+   PNG. Verify same-thread continuation, automatic final mail, inline display and
+   image saving in the owner's actual mail client. Read the sent raw MIME and
+   compare its verified RFC identity and image hash with the queued snapshot.
+5. Only after actual reply and continuation acceptance, finish the separately
+   authorized old OAuth cleanup. Until then retain those files; never restore
+   the retired transport, restore old SQLite state or replay old final answers.
+
+Synthetic tests establish the controller/MIME contract; they do not establish
+the actual client's rendering or the official plugin's production delivery.
+
 ## Confirmation tools and old threads
 
 `request_confirmation({key,request})` prepares one exact scope/merge/deploy target
@@ -101,6 +164,9 @@ does not automatically deploy any project.
 
 Run `npm test`, then the synthetic real CLI checks `verify-final-mail.mjs` and
 `verify-async-sandbox.mjs` on Linux with the pinned CLI. The former resumes an
-old-tool thread and checks native final equality, one queued reply and zero real
-mail/effects. The latter verifies real denial of credentials, raw effect logs and
-native networking. Neither check sends email or performs a business deployment.
+old-tool thread and checks native final equality, one queued reply, a frozen
+640×360 PNG with CID HTML and zero real mail/effects. The latter verifies real
+image-directory writes and denial of frozen artifacts, credentials, raw effect
+logs and native networking. Neither check sends email or performs a business deployment.
+
+See the [recorded image validation and remaining acceptance](validation-inline-images.md).

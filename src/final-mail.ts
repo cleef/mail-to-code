@@ -26,6 +26,7 @@ export class FinalMail {
         if (turn.status !== 'completed') return;
         const eligible = this.store.get<{ rootTurn: string }>('final-turn', c.id + ':' + turn.id);
         if (!eligible) return;
+        if(this.store.get('final-held',c.id+':'+turn.id))return;
         const items = new Map<string, any>();
         for (const value of this.store.all<any>('final-item')) if (value.conversationId === c.id && value.turnId === turn.id) items.set(value.item.id, value.item);
         for (const item of turn.items || []) if (item.id) items.set(item.id, item);
@@ -40,6 +41,12 @@ export class FinalMail {
             const pending = this.store.get<any>('turn-confirmation', c.id + ':' + turn.id);
             if (pending) this.store.put('turn-confirmation', c.id + ':' + eligible.rootTurn, pending);
         }
-        this.store.queueFinal(c, eligible.rootTurn, text, selected.map(i => i.id));
+        try {
+            this.store.queueFinal(c, eligible.rootTurn, text, selected.map(i => i.id));
+        } catch(error) {
+            const reason=error instanceof Error && /^MAIL_/.test(error.message) ? error.message : 'FINAL_REPLY_PREPARATION_FAILED';
+            this.store.put('final-held',c.id+':'+turn.id,{conversationId:c.id,turnId:turn.id,reason,status:'completed',rootTurn:eligible.rootTurn});
+            const current=this.store.conversation(c.id)!;current.error=reason;this.store.save(current);
+        }
     }
 }

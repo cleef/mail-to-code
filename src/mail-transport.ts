@@ -1,9 +1,10 @@
-import type { Attachment, MailPresentation, MailSummary } from './types.js';
+import type { Attachment, MailPresentation, MailSummary, MailBodySnapshot } from './types.js';
 export interface MessageRef { id: string; threadId?: string }
 export interface RawMessage extends MessageRef { threadId: string; raw: string; labelIds: string[]; internalDate?: string }
 export interface SendMail {
     to: string; subject: string; text: string; markdown?: boolean; summary?: MailSummary;
     presentation?: MailPresentation; messageId?: string; deliveryMarker?: string; threadId?: string;
+    bodySnapshot?: MailBodySnapshot;
     inReplyTo?: string; references?: string[]; attachments?: Attachment[]; attachmentHashes?: string[]; replyMessageId?: string;
 }
 export interface MailTransport {

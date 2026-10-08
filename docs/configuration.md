@@ -11,6 +11,15 @@ Development keeps its existing Codex configuration and API key. Keep credentials
 outside the checkout. See the [README setup guide](../README.md#setup) for file
 roles, permissions and plugin connection steps.
 
+For automatic async replies set `engine: "async-cli"` and explicitly set
+`asyncMailOutput: "assistant-final"`, then restart the service. New installs
+already use this output mode; an existing config that omits it still uses
+`queue-mail`. Switching output mode does not backfill historical final answers.
+The bridge adds the current task's writable `notes/mail-images/` directory and
+image rules to each new, resumed and recovery turn, including older Codex threads.
+The frozen `<dataDir>/artifacts/mail-images/` copies and mailbox credentials remain
+unavailable to native tools. Edited private guides are never overwritten.
+
 ```json
 {
   "gmailAddress": "agent@gmail.com",

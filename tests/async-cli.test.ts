@@ -313,9 +313,9 @@ test('sandbox is projects-root read-only with only feature worktrees/notes writa
 });
 test('async masks collapse a token inside denied configuration but retain an external token', async () => {
     const f = await fixture(), c = f.store.intake(incoming('masks'), 'raw', 'body');
-    const directory = join(f.root, 'config'), inside = join(directory, 'github-token'), outside = join(f.root, 'config-sibling', 'github-token');
+    const directory = join(f.root, 'config'), inside = join(directory, 'github-token'), outside = join(f.config.projectsRoot, 'config-sibling', 'github-token');
     await mkdir(directory);
-    await mkdir(join(f.root, 'config-sibling'));
+    await mkdir(join(f.config.projectsRoot, 'config-sibling'));
     await writeFile(inside, 'synthetic token');
     await writeFile(outside, 'synthetic token');
     const previous = process.env.MAIL_TO_CODE_CONFIG_DIR;

@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { PNG } from 'pngjs';
 import { ConfigSchema } from '../dist/src/config.js';
 import { AsyncStore } from '../dist/src/async-store.js';
 import { AsyncBridge, ASYNC_CONTRACT, ASYNC_CODEX_VERSION, asyncPolicy } from '../dist/src/async-cli.js';
@@ -50,22 +52,33 @@ try {
     const seed = await old.request('turn/start', { threadId: c.codexThread, input: [{ type: 'text', text: 'Synthetic initialization: reply READY only. No tools, file edits or email.' }] });
     await wait(() => completed.has(seed.turn.id), 120); await old.close();
     const event = store.input(input.id); event.status = 'accepted'; event.turnId = seed.turn.id; store.saveInput(event);
+    const image=new PNG({width:640,height:360});image.data=Buffer.alloc(640*360*4);
+    for(let i=0;i<image.data.length;i+=4){image.data[i]=36;image.data[i+1]=110;image.data[i+2]=220;image.data[i+3]=255;}
+    const imageBytes=PNG.sync.write(image),imageHash=createHash('sha256').update(imageBytes).digest('hex');
+    const suppliedImage=join(dataDir,'async-cli','features',c.id,'input','fixture.png');
+    await writeFile(suppliedImage,imageBytes,{mode:0o600});
     const reply = { ...input, id: 'reply', rfcId: '<reply@example.test>', inReplyTo: input.rfcId,
-        text: '请先通过控制器只读检查 sample 的后台服务。然后向我申请增加 second 项目的修改范围：只准备确认请求，不授予范围、不创建 worktree、不修改文件。以自然中文告诉我检查结果和需要确认的事情，不要求 START 或复制固定句式。不要合并、部署或另写通知稿。' };
+        text: '请先通过控制器只读检查 sample 的后台服务。然后向我申请增加 second 项目的修改范围：只准备确认请求，不授予范围、不创建 worktree、不修改项目源文件。以自然中文告诉我检查结果和需要确认的事情，不要求 START 或复制固定句式。不要合并、部署或另写通知稿。' };
     store.intake(reply, 'synthetic MIME', reply.text);
+    const queued=store.input(reply.id);
+    queued.incoming.text+= '\nAlso copy the supplied valid 640x360 PNG from '+suppliedImage+' into fixture.png under the writable mail-images directory specified by the runtime instructions. Use native local file tools to make the copy. Include ![Visible fixture](mail-images/fixture.png) in your final reply. This old-tool thread has no request_confirmation: use queue_mail with request.kind=scope and request.projects=[{path:"second",role:"modify"}] to prepare the exact confirmation binding; its text is not separately delivered in assistant-final mode. Write the user-facing reply once as your final answer. Do not edit the controller.';
+    queued.fullText=queued.incoming.text;store.saveInput(queued);
     bridge = new AsyncBridge(config, store, transport, async (_, handler) => create(handler), undefined, guideDirectory);
-    await bridge.dispatch(store.conversation(c.id)); await wait(() => !store.conversation(c.id).activeTurn, 180);
+    await bridge.dispatch(store.conversation(c.id)); await wait(() => !store.conversation(c.id).activeTurn, 300);
     await bridge.pump();
     const historyClient = create(denyInteractive); let history;
     try { await historyClient.start(); history = await historyClient.request('thread/read', { threadId: c.codexThread, includeTurns: true }); } finally { await historyClient.close(); }
     const turn = history.thread.turns.at(-1), finals = turn.items.filter(i => i.type === 'agentMessage' && i.phase === 'final_answer');
     const last = turn.items.at(-1); const native = (finals.length ? finals : last?.type === 'agentMessage' ? [last] : []).map(i => i.text).join('\n\n');
     const outbox = store.mails(); assert.equal(outbox.length, 1); assert.equal(outbox[0].text, native);
+    assert.equal(outbox[0].bodySnapshot.images.length,1);assert.equal(outbox[0].attachmentHashes[0],imageHash);
+    assert.match(outbox[0].bodySnapshot.html,/<img src="cid:/);
+    assert.equal(createHash('sha256').update(await readFile(outbox[0].attachments[0].path)).digest('hex'),imageHash);
     assert.equal(store.all('request').length, 1); assert.equal(store.all('request')[0].mailId, outbox[0].id);
     assert.equal(store.get('scope', c.id).length, 1); assert.equal(store.all('operation').length, 1);
     assert.equal((await readFile(trace, 'utf8')).trim(), 'inspect');
     await bridge.stop(); bridge = new AsyncBridge(config, store, transport, async (_, handler) => create(handler), undefined, guideDirectory);
     await bridge.dispatch(store.conversation(c.id)); assert.equal(store.mails().length, 1);
-    const report = { codexVersion: ASYNC_CODEX_VERSION, sameThread: store.conversation(c.id).codexThread === started.thread.id, finalEqualsNative: true, queuedMails: outbox.length, preparedConfirmations: 1, readOnlyInspections: 1, grantsPreserved: true, historicalRepliesSent: 0, realMailSent: 0, businessWrites: 0, finalText: native };
+    const report = { codexVersion: ASYNC_CODEX_VERSION, sameThread: store.conversation(c.id).codexThread === started.thread.id, finalEqualsNative: true, queuedMails: outbox.length, inlineImage:{width:640,height:360,frozenHashVerified:true,cidHtml:true}, preparedConfirmations: 1, readOnlyInspections: 1, grantsPreserved: true, historicalRepliesSent: 0, realMailSent: 0, businessWrites: 0, finalText: native };
     await writeFile(join(root, 'report.json'), JSON.stringify(report, null, 2)); console.log(JSON.stringify({ root, ...report }, null, 2));
 } finally { await old.close(); await bridge?.stop(); store.close(); }
