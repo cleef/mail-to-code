@@ -1,5 +1,10 @@
 # Mail as an asynchronous Codex CLI
 
+The async engine also supports task-bound Claude Code execution; see
+[executor selection, isolation and recovery](executors.md). The Codex protocol
+details below describe its existing adapter. Mail routing and permission rules
+are shared by both executors.
+
 The opt-in `async-cli` engine runs one persistent Codex conversation per feature,
 starting in `~/projects` on the host running the service. Codex discovers relevant projects, reads their rules and
 understands authenticated new email bodies directly. Full MIME, quoted history

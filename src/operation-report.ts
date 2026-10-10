@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, openSync, writeSync, closeSync, constants } from 'node:fs';
 import { join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import type { AsyncStore, Operation } from './async-store.js';
 import type { Config } from './config.js';
 import { OperationResultSchema } from './operation-result.js';

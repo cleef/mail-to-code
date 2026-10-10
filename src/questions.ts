@@ -1,4 +1,4 @@
-import {z} from 'zod';
+import {z} from 'zod/v3';
 import type {QuestionInput,QuestionProposal} from './types.js';
 const optionalText=(max:number)=>z.string().trim().min(1).max(max).nullish().transform(v=>v??undefined);
 const OptionSchema=z.object({id:z.string().min(1).max(80),label:z.string().min(1).max(300),impact:z.string().min(1).max(1200)}).strict();

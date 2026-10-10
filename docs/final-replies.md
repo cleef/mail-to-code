@@ -5,6 +5,9 @@ installations without the output field retain queue-mail behavior; legacy reject
 assistant-final mode. Changing output mode requires a service restart.
 
 Completed native `agentMessage` items with phase `final_answer` are authoritative.
+Claude Code's adapter normalizes its successful terminal result into this same
+final-message contract. New tasks add a frozen executor label to rendered MIME,
+while preserving the native final text verbatim in the outbox audit record.
 Commentary, reasoning and tool logs are not sent. Older pinned CLI turns lacking
 phase use only their terminal assistant item; a terminal native plan is supported.
 There is no second model or notification draft. Multiple steered inputs share one

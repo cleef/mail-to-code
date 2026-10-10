@@ -4,6 +4,12 @@ MailToCode is a self-hosted, email-driven coding controller that uses the offici
 
 Describe a task by email. New installations pass it to a persistent Codex CLI conversation and return Codex's final reply in the same mail thread. Codex discovers repositories, discusses choices and works in approved isolated worktrees. Merge and deployment require separate approval of the exact current target.
 
+Async tasks can also use **Claude Code**: start a fresh email with `[claude]`
+in the subject, or `[codex]` for Codex. No tag defaults to Codex. Replies keep
+the task's original executor, even if you change their subject. Both executors
+use the same controller permissions, PR checks and separate merge/deployment
+confirmations. See [dual executor setup and recovery](docs/executors.md).
+
 ## Workflow
 
 **Email request → Codex conversation and implementation → Review → Separate merge and deployment confirmations**
@@ -89,6 +95,7 @@ Edit `config.json` before running the service:
 | `productDocs` | Optional product-record repository; omit if you do not use one |
 | `dataDir` | Runtime state, default `~/.local/share/mail-to-code/`; preserve the existing path during migration |
 | `codexCommand` | Codex CLI command, default `codex` through PATH; use an absolute binary path if your service PATH does not contain it |
+| `claudeCommand` | Optional Claude Code executable, default `claude` through PATH; requires version 2.1.296 for `[claude]` tasks |
 | `pollSeconds` | Gmail polling interval, default `60` seconds |
 | `mailCodexHome` | Dedicated private Codex home, default `<configDir>/codex-mail/`; keep it separate from development and project checkouts |
 

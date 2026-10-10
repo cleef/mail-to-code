@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {configDir} from './config.js';
-import {z} from 'zod';
+import {z} from 'zod/v3';
 import type {Session,WorkflowStage,WorkflowState} from './types.js';
 export const WorkflowProposalSchema=z.object({decision:z.enum(['clarify','propose_step','complete']),kind:z.enum(['documentation','implementation','maintenance']),name:z.string().min(1).max(200),rationale:z.string().min(1).max(10000),deliverables:z.array(z.string().min(1).max(2000)).max(30),acceptance:z.array(z.string().min(1).max(2000)).max(30)}).strict();
 export type WorkflowProposal=z.infer<typeof WorkflowProposalSchema>;

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 export const CommandSchema = z.object({ executable: z.string().min(1), args: z.array(z.string()).default([]), cwd: z.string().default('.'), env: z.record(z.string()).default({}) }).strict();
 const relative = z.string().refine(p => !p.startsWith('/') && !p.split(/[\\/]/).includes('..') && !/[\r\n\0]/.test(p), 'Expected a worktree-relative path');
 export const ProfileSchema = z.object({

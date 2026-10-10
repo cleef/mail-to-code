@@ -1,4 +1,4 @@
-import {z} from 'zod';
+import {z} from 'zod/v3';
 import type {Session,RepoExecution} from './types.js';
 import {QuestionProposalSchema,QUESTION_OUTPUT} from './questions.js';
 

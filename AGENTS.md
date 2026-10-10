@@ -5,7 +5,7 @@ Keep all tests and documentation synthetic: never include operator projects,
 private email, credentials, deployment addresses or runtime state in this repo.
 
 The bridge owns Gmail, privileged Git, PRs, merge and deployment. Async email goes
-directly to a persistent Codex session; the bridge does not advance business stages.
+directly to its bound persistent Codex or Claude Code session; the bridge does not advance business stages.
 Source edits stay in approved worktrees. Preserve immutable mail and exact operation
 bindings. Never retry uncertain effects. Stage rules remain in the legacy engine.
 
