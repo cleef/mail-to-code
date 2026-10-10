@@ -1,7 +1,7 @@
 import { readFile, mkdir, chmod, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import {ProfileSchema} from './profile.js';
 import { OperationSchema, OperationIdSchema } from './operations.js';
 
@@ -18,6 +18,7 @@ export const ConfigSchema = z.object({
   asyncMailOutput:z.enum(['queue-mail','assistant-final']).default('queue-mail'),
   gmailAddress: z.string().email(), ownerAddress: z.string().email(),
   dataDir: z.string().default('~/.local/share/mail-to-code'), codexCommand: z.string().default('codex'),
+  claudeCommand: z.string().min(1).default('claude'),
   mailCodexHome: z.string().min(1).optional(),
   pollSeconds: z.number().int().min(10).default(60), timeoutSeconds: z.number().int().min(30).default(3600),
   githubTokenFile: z.string().optional(), repositories: z.record(repository).default({}),

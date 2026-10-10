@@ -1,4 +1,4 @@
-import {z} from 'zod';
+import {z} from 'zod/v3';
 export const MailBriefSchema=z.object({
  goal:z.string().min(1).max(1200),
  choices:z.array(z.object({category:z.enum(['product','technical']),topic:z.string().min(1).max(160),choice:z.string().min(1).max(1200),reason:z.string().min(1).max(1200),tradeoff:z.string().min(1).max(1200)}).strict()).max(16),

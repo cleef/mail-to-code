@@ -14,11 +14,12 @@
     "mail-connect": "node dist/src/cli.js mail-connect"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.296",
     "html-to-text": "9.0.5",
     "jpeg-js": "0.4.4",
     "mailparser": "3.9.32",
     "pngjs": "7.0.0",
-    "zod": "3.25.76"
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@types/html-to-text": "9.0.4",

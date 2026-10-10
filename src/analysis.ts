@@ -1,6 +1,6 @@
 import {QuestionInputSchema,QUESTION_OUTPUT} from './questions.js';
 import {MailBriefSchema,MAIL_BRIEF_OUTPUT} from './mail-brief.js';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { ProfileSchema } from './profile.js';
 import { MemoryProposalSchema } from './memory.js';
 import {WorkflowProposalSchema,WORKFLOW_OUTPUT} from './workflow.js';

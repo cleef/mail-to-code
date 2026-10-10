@@ -3,11 +3,14 @@ import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { prepareMailBody } from './mail-images.js';
 import type { Incoming, Outbound } from './types.js';
+import { executorOf, executorLabel, sessionOf, selectExecutor, type Executor } from './executor.js';
 export interface Conversation {
     id: string;
     subject: string;
     gmailThread: string;
     codexThread?: string;
+    executor?: Executor;
+    executorSession?: string;
     activeTurn?: string;
     paused?: boolean;
     error?: string;
@@ -111,7 +114,14 @@ export class AsyncStore {
     }
     conversation(id: string) { return this.get<Conversation>('conversation', id); }
     conversations() { return this.all<Conversation>('conversation'); }
-    save(c: Conversation) { this.put('conversation', c.id, c); }
+    save(c: Conversation) {
+        const previous = this.conversation(c.id);
+        if (previous && executorOf(previous) !== executorOf(c)) throw Error('IMMUTABLE_TASK_EXECUTOR');
+        if (executorOf(c) === 'claude' && c.codexThread) throw Error('EXECUTOR_SESSION_MISMATCH');
+        if (previous && sessionOf(previous) && sessionOf(previous) !== sessionOf(c)) throw Error('IMMUTABLE_EXECUTOR_SESSION');
+        if (c.executorSession && c.codexThread && c.executorSession !== c.codexThread) throw Error('EXECUTOR_SESSION_MISMATCH');
+        this.put('conversation', c.id, c);
+    }
     input(id: string) { return this.get<InputEvent>('input', id); }
     inputs() { return this.all<InputEvent>('input'); }
     saveInput(e: InputEvent) { this.put('input', e.id, e); }
@@ -182,7 +192,7 @@ export class AsyncStore {
             return this.conversation(duplicate.conversationId)!;
         }
         return this.transaction(() => {
-            const c = this.route(incoming) || { id: randomUUID(), subject: incoming.subject, gmailThread: incoming.threadId, createdAt: new Date().toISOString() };
+            const c = this.route(incoming) || { id: randomUUID(), subject: incoming.subject, gmailThread: incoming.threadId, executor: selectExecutor(incoming.subject), createdAt: new Date().toISOString() };
             this.save(c);
             this.saveInput({ id: incoming.id, conversationId: c.id, incoming, raw, fullText, status: 'queued' });
             return c;
@@ -197,7 +207,9 @@ export class AsyncStore {
                     throw Error('MAIL_KEY_REUSED_WITH_DIFFERENT_CONTENT');
                 return { mail: old, request: this.all<ApprovalRequest>('request').find(r => r.mailId === old.id) };
             }
-            const frozen=prepareMailBody(dirname(this.path),c.id,text);
+            // Preserve the native answer verbatim for audit. The immutable MIME
+            // snapshot adds transport metadata without changing thread subjects.
+            const frozen=prepareMailBody(dirname(this.path),c.id,c.executor ? `Executor: ${executorLabel(c)}\n\n${text}` : text);
             const inputs=this.inputs().filter(e=>e.conversationId===c.id),parent=inputs.filter(e=>e.status==='accepted').at(-1)||inputs.at(-1);
             const id = randomUUID(), mail: Outbound = { id, sessionId: c.id, kind: 'agent', text, ...frozen, replySourceId:parent?.id, status: 'pending', createdAt: new Date().toISOString(), attempts: 0, deliveryMarker: id };
             this.saveMail(mail);

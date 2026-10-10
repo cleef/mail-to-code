@@ -2,7 +2,7 @@ import { mkdir, readFile, realpath, stat, lstat, readlink } from 'node:fs/promis
 import { join, resolve, relative } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import type { Config } from './config.js';
 import { AsyncStore, type Conversation, type ApprovalRequest } from './async-store.js';
 import type { Session } from './types.js';
@@ -15,6 +15,7 @@ import { projectLocations } from './async-projects.js';
 import { asyncPolicy } from './async-policy.js';
 import { OperationsAdapter, OperationIdSchema, digest, withProjectOperationLock } from './operations.js';
 import { OperationJournal, ReceiptSchema, operationStatus, FailedResolutionSchema } from './operation-report.js';
+import { sessionOf } from './executor.js';
 export interface ScopeProject {
     path: string;
     role: 'modify' | 'reference' | 'product_record';
@@ -37,9 +38,13 @@ export const ASYNC_TOOLS = [
     tool('project_merge', 'Merge only the exact independently approved PR head/base. An uncertain effect is not retried automatically.', { requestId: text }),
     tool('project_deploy', 'Deploy only the exact independently approved merged commit and operator deployment profile. An uncertain effect is not retried automatically.', { requestId: text }),
 ];
+// Claude has no native shell or file tools. This adapter uses exactly the same
+// OS sandbox as Codex native commands and never issues a source-check receipt.
+export const WORKSPACE_TOOL = tool('workspace_command', 'Read projects and edit approved worktrees or task notes using a sandboxed command. The working directory is the projects root. No native network, secrets or Git metadata access. Use project_command for checks and project_* tools for privileged operations.', { executable: text, args: strings });
 const project = z.object({ path: z.string().min(1), role: z.enum(['modify', 'reference', 'product_record']) }).strict();
 const request = z.object({ kind: z.enum(['scope', 'merge', 'deploy']), project: z.string().optional(), projects: z.array(project).min(1).optional() }).strict();
 const schemas: Record<string, z.ZodTypeAny> = {
+    workspace_command: z.object({ executable: z.string().min(1), args: z.array(z.string()) }).strict(),
     queue_mail: z.object({ key: z.string().min(1).max(200), text: z.string().min(1).max(50000), request: request.optional() }).strict(),
     request_confirmation: z.object({ key: z.string().min(1).max(200), request }).strict(),
     grant_scope: z.object({ sourceMailId: z.string(), evidence: z.string().min(1), projects: z.array(project).min(1).max(30), requestId: z.string().optional() }).strict(),
@@ -78,7 +83,7 @@ export class AsyncTools {
             const scope = this.scopes().find(p => canonical(p.path) === canonical(repo.path) && p.identity === repo.github && p.role !== 'reference');
             if (!scope) continue;
             try {
-                const operations = await this.call(this.conversation.codexThread!, 'project_operations', { project });
+                const operations = await this.call(sessionOf(this.conversation)!, 'project_operations', { project });
                 let currentTarget: unknown;
                 try { currentTarget = await this.target('deploy', project); } catch { /* A merged release may not be prepared yet. */ }
                 const deploymentRequests = this.store.all<ApprovalRequest>('request').filter(r => r.conversationId === this.conversation.id && r.kind === 'deploy' && (r.target as { project?: string }).project === project).map(r => ({
@@ -189,12 +194,16 @@ export class AsyncTools {
         return { project: alias, commit: s.mergeSha, profileHash: await new OperationsAdapter(this.config, this.store, this.conversation.id).deployFingerprint(alias) };
     }
     async call(threadId: string, name: string, raw: unknown): Promise<unknown> {
-        if (threadId !== this.conversation.codexThread)
+        if (!threadId || threadId !== sessionOf(this.conversation))
             throw Error('PRIMARY_AGENT_ONLY');
         const schema = schemas[name];
         if (!schema)
             throw Error('UNKNOWN_BRIDGE_TOOL');
         const a = schema.parse(raw);
+        if (name === 'workspace_command') {
+            const result = await new Runner(this.config).check(this.config.projectsRoot, a.executable, a.args, this.config.projectsRoot, this.signal, false, { policy: asyncPolicy(this.config, this.conversation) });
+            return { stdout: result.stdout, stderr: result.stderr };
+        }
         if (name === 'project_command' && a.executable === 'mail-to-code-operation') {
             if (a.network || a.cwd !== '.' || a.args.length !== 2 || !['list', 'run', 'status'].includes(a.args[0])) throw Error('INVALID_OPERATION_COMPATIBILITY_CALL');
             let params: unknown;

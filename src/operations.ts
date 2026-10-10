@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstat, readFile, realpath, mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import type { Config } from './config.js';
 import type { AsyncStore, Operation } from './async-store.js';
 import { execute } from './process.js';

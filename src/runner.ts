@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import type { Config } from './config.js';
 import { configDir } from './config.js';
 import type { Session } from './types.js';
@@ -61,7 +61,7 @@ export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop'
   // A checkout may contain tracked production credentials. Deny conventional
   // secret files explicitly, including in other read-only task repositories.
   const scan=(root:string)=>{let entries;try{entries=readdirSync(root,{withFileTypes:true});}catch{return;}
-    for(const e of entries){const path=join(root,e.name),secret=(analysis&&(e.name==='.git'||e.isSymbolicLink()&&!trustedProjectLinks.includes(path)))||['.ssh','.aws','.gnupg','.config','.codex','.npmrc','.pypirc','.netrc','auth.json'].includes(e.name)||/\.(pem|key)$/.test(e.name)||/^\.env($|\.)/.test(e.name)&&!['.env.example','.env.sample'].includes(e.name);
+    for(const e of entries){const path=join(root,e.name),secret=(analysis&&(e.name==='.git'||e.isSymbolicLink()&&!trustedProjectLinks.includes(path)))||['.ssh','.aws','.gnupg','.config','.codex','.claude','.claude.json','.npmrc','.pypirc','.netrc','auth.json'].includes(e.name)||/\.(pem|key)$/.test(e.name)||/^\.env($|\.)/.test(e.name)&&!['.env.example','.env.sample'].includes(e.name);
       if(secret){filesystem[path]='deny';continue;}if(e.isDirectory()&&!['.git','node_modules','dist','dist-h5','.run','.release'].includes(e.name))scan(path);
     }
   };for(const root of [worktree,...readPaths,...(config.productDocs?[config.productDocs]:[])])scan(resolve(root));

@@ -1,5 +1,5 @@
 import {QuestionProposalSchema,QUESTION_OUTPUT,DECISION_GUIDANCE} from './questions.js';
-import {z} from 'zod';
+import {z} from 'zod/v3';
 import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {Config} from './config.js';

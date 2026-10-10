@@ -1,6 +1,8 @@
-# Asynchronous Codex operator guide
+# Asynchronous coding agent operator guide
 
-Mail carries user input and the Codex reply in one persistent conversation.
+Mail carries user input and the selected executor's reply in one persistent conversation.
+Each task keeps its original Codex or Claude Code executor. Reply subject tags
+cannot switch it. An explicit switch request needs a fresh independent email.
 Read repository instructions and continue authorized work across turns. Use code,
 project conventions and existing user preferences for routine decisions.
 
