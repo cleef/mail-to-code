@@ -1,37 +1,54 @@
 # MailToCode
 
-MailToCode is a self-hosted, email-driven coding controller that uses the official Codex Gmail plugin for mailbox access.
+MailToCode is a self-hosted, email-driven coding controller with **Codex and
+Claude Code** executors. Mailbox access uses the official Codex Gmail plugin.
 
-Describe a task by email. New installations pass it to a persistent Codex CLI conversation and return Codex's final reply in the same mail thread. Codex discovers repositories, discusses choices and works in approved isolated worktrees. Merge and deployment require separate approval of the exact current target.
-
-Async tasks can also use **Claude Code**: start a fresh email with `[claude]`
-in the subject, or `[codex]` for Codex. No tag defaults to Codex. Replies keep
-the task's original executor, even if you change their subject. Both executors
-use the same controller permissions, PR checks and separate merge/deployment
-confirmations. See [dual executor setup and recovery](docs/executors.md).
+Describe a task by email. The controller passes it to a persistent session of the
+selected executor and returns its final reply in the same mail thread. The agent
+discovers repositories, discusses choices and works in approved isolated
+worktrees. Merge and deployment require separate approval of the exact current
+target.
 
 ## Workflow
 
-**Email request → Codex conversation and implementation → Review → Separate merge and deployment confirmations**
+**Email request → Codex or Claude Code session → Implementation and review → Separate merge and deployment confirmations**
 
-- New installations use the `async-cli` engine. An explicit implementation request can authorize its stated scope; Codex discusses choices and asks for missing decisions when needed. There is no required `START` loop.
+| Action | Email example | Behavior |
+| --- | --- | --- |
+| Start with Claude Code | Subject: `[claude] Add CSV export`; body: `Implement export for the current filters, run tests and prepare a PR.` | Creates a new task bound to Claude Code |
+| Start with Codex | Subject: `[codex] Add CSV export`, or an untagged subject | Creates a new task bound to Codex |
+| Clarify or revise | Reply: `Use YYYY-MM-DD for dates.` | Continues the same task, executor, native session and PR when present |
+| Confirm merge | Reply to the latest merge request: `Merge this reviewed PR version.` | Verifies the current PR head and base before merging |
+| Confirm deployment | Reply to the separate deployment request: `Deploy this version to the environment specified in your email.` | Verifies the approved commit and deployment target |
+
+- Executor tags must lead a fresh email's subject and are case-insensitive. No tag defaults to Codex. Existing tasks continue with their original executor. Changing a reply's subject does not switch executors; start a separate email to choose another executor.
+- Use the `async-cli` engine. An explicit implementation request can authorize its stated scope without an extra start command. A discussion-only request stays in discussion until you request implementation. The selected agent asks for missing decisions when needed.
 - A fresh email without reply references starts a new conversation. Replying to a known message continues its conversation across follow-ups, repository changes and service restarts.
 - Requests can include multiple repositories and read-only references. Implementation stays in approved worktrees; adding repositories or changing a reference into a write target requires explicit scope confirmation.
 - Merge and deployment each require a separate confirmation bound to the exact current target and a verified delivered request. A direct natural-language reply can confirm the proposed action; fixed command words are not required.
-- SQLite preserves mail identities, inputs, grants, operation receipts and immutable replies. Native Codex history preserves the conversation, while `FEATURE.md` records progress and decisions.
-- The controller owns email, privileged Git, credentials and external effects. Codex uses approved bridge tools; its native shell cannot access controller secrets or production credentials/networking.
+- SQLite preserves mail identities, inputs, grants, operation receipts and immutable replies. The corresponding native Codex or Claude history preserves session context, while `FEATURE.md` records progress and decisions.
+- Both executors use the same scope grants, PR checks and approval rules. Implementation permission does not authorize merge or deployment; a changed PR head invalidates its previous merge approval.
+- The controller owns email, privileged Git, credentials and external effects. Agents use approved bridge tools; development commands cannot access controller secrets or unrestricted networking.
+- Reply normally to provide requirements, request progress or ask the agent to stop. Claude processes follow-ups after its active turn finishes; Codex can accept follow-ups during a turn. Email stop requests require interpretation; an operator can stop the service immediately when needed.
+- An unavailable Claude executor leaves its task blocked with the original session and queued input. It does not fall back to Codex.
 - Changes to MailToCode itself require manual review, merge and upgrade.
 
-Existing configurations without `engine` retain the `legacy` engine and its staged
-`START` / `APPROVE` / `DEPLOY` workflow. See [legacy usage](#legacy-engine-usage).
+See [executor selection, permissions and recovery](docs/executors.md).
 
 ## Requirements
 
 Node.js **22.13+ (22.x)**, npm, Git, repository-scoped GitHub credentials and
 **Codex CLI 0.159.2** with the official Gmail plugin. Mailbox access uses a
 separate ChatGPT login in a private Codex home; development can continue using
-its existing API key, model settings and history. Revalidate the plugin tools,
-app-server protocol and filesystem permissions before changing Codex versions.
+its existing API key, model settings and history.
+
+For `[claude]` tasks, also install **Claude Code 2.1.296** and authenticate the
+service user. `npm ci` installs the pinned Claude Agent SDK **0.3.296**; the
+adapter uses your installed Claude executable. Codex remains required for Claude
+tasks because it provides Gmail access and the OS sandbox for development
+commands. Revalidate plugin tools, executor protocols and sandbox compatibility
+before changing versions or installation paths.
+
 Linux services use systemd. Podman is required for configured previews and
 isolated project services.
 
@@ -50,25 +67,23 @@ node dist/src/cli.js init --gmail agent@gmail.com --owner owner@example.com
 Replace both email addresses. `gmailAddress` is the agent's Gmail mailbox;
 `ownerAddress` is the operator's mailbox used to send requests and approvals.
 They must be different. `init` selects `engine: "async-cli"` and
-`asyncMailOutput: "assistant-final"`, so native final replies become email.
-It creates private configuration and guide files;
-it does not overwrite an existing `config.json`. Existing installations should
+`asyncMailOutput: "assistant-final"`, so the selected executor's native final
+replies become email. It creates private configuration and guide files without
+overwriting an existing `config.json`. Existing installations should
 edit their private files and follow the [upgrade procedure](docs/operations.md).
 
 ### Private configuration and templates
 
 [`config-templates/`](config-templates/) contains public **templates**, not your
-installation's active configuration. `init` generates `config.json` and copies
-`ASYNC_AGENTS.md`, `AGENTS.md` and `WORKFLOW.md` into `~/.config/mail-to-code/`.
-Installation and upgrades preserve guides that you have edited; there is no need to copy the
-entire template directory on each upgrade.
+installation's active configuration. `init` generates `config.json` and
+initializes the active operator guide, `ASYNC_AGENTS.md`, in
+`~/.config/mail-to-code/`. Installation and upgrades preserve edited guides;
+there is no need to copy the entire template directory on each upgrade.
 
 | Private file | Purpose | How it is created |
 | --- | --- | --- |
 | `config.json` | Mailboxes, project directories and execution settings | Generated by `init`; edit for your installation |
-| `ASYNC_AGENTS.md` | Project and operator conventions loaded by the async engine | Initialized by `init` or `async-agent-guide init`; editable |
-| `AGENTS.md` | Project and operator conventions for the legacy engine | Initialized from the template; editable |
-| `WORKFLOW.md` | Staged planning and review conventions for the legacy engine | Initialized from the template; editable |
+| `ASYNC_AGENTS.md` | Operator conventions injected into both Codex and Claude sessions | Initialized by `init` or `async-agent-guide init`; editable |
 | `codex-mail/` | Dedicated Codex login and official Gmail plugin connection | Created by `mail-connect`; managed by Codex |
 | `github-token` | Repository-scoped GitHub credentials | Supply privately at the configured `githubTokenFile` path |
 
@@ -77,23 +92,26 @@ The configuration directory must have permissions `700`, and private files
 `MAIL_TO_CODE_CONFIG_DIR`, using an absolute path. If you override it, also set
 `githubTokenFile` to the location where you store your GitHub credential.
 
-Async sessions load `ASYNC_AGENTS.md`; they do not load the legacy guides.
-When upgrading an existing installation, initialize the async guide with
-`node dist/src/cli.js async-agent-guide init` and manually carry over useful
-project conventions. The command preserves an existing edited async guide.
+The controller injects `ASYNC_AGENTS.md` at session startup or resume and reads
+it again for subsequent mail inputs. This does not require
+`~/.codex/AGENTS.md`. If the private guide is absent, the bundled template is
+used. The agent also receives instructions to read relevant repository rules.
+Initialize the guide separately with
+`node dist/src/cli.js async-agent-guide init`; an existing edited guide is
+preserved.
 
 Edit `config.json` before running the service:
 
 | Setting | What to provide |
 | --- | --- |
-| `engine` | `async-cli` for new installations; an omitted field retains `legacy` |
-| `asyncMailOutput` | `assistant-final` sends native final replies and requires `async-cli`; an omitted field retains explicit `queue-mail` delivery |
+| `engine` | Set explicitly to `async-cli` |
+| `asyncMailOutput` | Set to `assistant-final` for native final replies; `queue-mail` selects explicit bridge-tool delivery |
 | `gmailAddress` / `ownerAddress` | Agent Gmail address and the authorized operator address |
 | `projectsRoot` | Directory containing your project repositories, default `~/projects` |
 | `githubTokenFile` | Private GitHub token file; repository write access is required |
 | `repositories` / `profiles` | Optional explicit repository and install/build/check/preview settings; projects can also be discovered and profiles inferred |
 | `productDocs` | Optional product-record repository; omit if you do not use one |
-| `dataDir` | Runtime state, default `~/.local/share/mail-to-code/`; preserve the existing path during migration |
+| `dataDir` | Runtime state, default `~/.local/share/mail-to-code/`; preserve the existing path during upgrades |
 | `codexCommand` | Codex CLI command, default `codex` through PATH; use an absolute binary path if your service PATH does not contain it |
 | `claudeCommand` | Optional Claude Code executable, default `claude` through PATH; requires version 2.1.296 for `[claude]` tasks |
 | `pollSeconds` | Gmail polling interval, default `60` seconds |
@@ -104,10 +122,10 @@ approval. See [configuration examples](docs/configuration.md) for profiles,
 previews and deployment settings. Runtime state and credentials do not belong
 in the checkout.
 
-Changing `engine` or `asyncMailOutput` is an explicit configuration change;
-upgrading the source does not enable either mode automatically. Restart the
-service after changing output mode. Follow the [cutover procedure](docs/async-cli.md#opt-in-cutover-and-rollback)
-before switching an existing legacy installation to the async engine.
+The installed service uses `PATH=/usr/local/bin:/usr/bin:/bin`. Configure absolute
+executor paths when needed, and verify Codex's executable and runtime files are
+accessible under the configured OS sandbox. Restart the service after changing
+executor paths or output mode.
 
 ### Connect Gmail
 
@@ -141,9 +159,26 @@ private with directory permissions `700` and file permissions `600`.
 
 `mail-plugin-check` checks the tool protocol and makes an actual profile call;
 `doctor` does not send mail. A profile success is not delivery acceptance.
-See [mailbox transport and migration](docs/gmail-plugin-readiness.md), the
-[official plugin guide](https://learn.chatgpt.com/docs/plugins) and
-[Codex authentication guide](https://learn.chatgpt.com/docs/auth).
+See [Gmail plugin readiness](docs/gmail-plugin-readiness.md).
+
+### Enable Claude Code
+
+Install the required Claude Code version on the service host and authenticate
+the service user, then verify:
+
+```sh
+claude --version
+```
+
+The expected version is `2.1.296 (Claude Code)`. Set `claudeCommand` to an absolute
+path if the executable is outside the service's PATH.
+
+The adapter uses Claude's saved login and allowlisted authentication/model values
+from the service environment or a regular private (`600`)
+`~/.claude/settings.json` file. It disables account/project customizations,
+plugins, hooks and native tools; Claude uses controller MCP tools for sandboxed
+development and approved external effects. See [Claude setup and permissions](docs/executors.md#runtime-and-permissions)
+for supported authentication variables and restrictions.
 
 ### Verify and start
 
@@ -154,15 +189,17 @@ Build the preview image with `./scripts/build-preview.sh` if your projects need
 screenshots or isolated test services, then check readiness:
 
 ```sh
-node dist/src/cli.js async-doctor
+node dist/src/cli.js doctor
 ```
 
-`async-doctor` checks Node, the projects root, pinned Codex version, async guide,
-configured private operation scripts and Gmail plugin protocol and identity. It does not
-perform the legacy repository/runtime checks; prepare the GitHub credential and
-project profiles separately. `doctor` also selects this check when
-`engine` is `async-cli`. The async database initializes when the service starts;
-the legacy `migrate` command is not required for a new async installation.
+With `engine: "async-cli"`, `doctor` runs the same checks as `async-doctor`: Node,
+projects root, pinned Codex version, optional Claude version, operator guide,
+configured private operation scripts and Gmail plugin protocol and identity.
+The Claude check is optional for Codex-only installations; verify it passes when
+enabling Claude tasks. Version checks do not prove Claude authentication or
+successful model execution. Prepare GitHub credentials and project profiles
+separately; they are not fully tested by this readiness check. The runtime
+database initializes when the service starts.
 
 Start the controller only after readiness passes. Install and start the user service:
 
@@ -171,88 +208,71 @@ Start the controller only after readiness passes. Install and start the user ser
 systemctl --user start mail-to-code.service
 ```
 
-For a legacy installation, keep the service stopped, run
-`node dist/src/cli.js migrate` and `node dist/src/cli.js doctor`, then start only
-after its schema and checks pass. See [operations](docs/operations.md) for
-upgrades, backups and recovery, and the [async guide](docs/async-cli.md) for
-existing-installation cutover. A controller upgrade does not deploy its projects.
+Run one mailbox consumer. See [operations](docs/operations.md) for upgrades,
+backups and recovery. A controller upgrade does not deploy its projects.
 
 **Email language:** write requests in your preferred language. The operator guide
 and model instructions tell the agent to use the same language for generated
-plans, discussion, summaries and questions. Command-only replies such as `START`
-do not switch that language. Keep control commands, code, paths and identifiers
+plans, discussion, summaries and questions. Keep code, paths and identifiers
 unchanged. Built-in controller status tables and approval boilerplate currently
 include Chinese text; full localization of those fixed templates is not yet
 implemented.
 
 ## Asynchronous CLI engine
 
-The `async-cli` engine starts one persistent Codex feature conversation in the
-configured `projectsRoot` on the service host (default `~/projects`). Work
-continues within approved scope, and progress lives in
+The `async-cli` engine starts one persistent Codex or Claude Code session per
+task in the configured `projectsRoot` on the service host (default `~/projects`).
+Work continues within approved scope, and progress lives in
 `<dataDir>/async-cli/features/<feature-id>/notes/FEATURE.md`.
 
-New installations use `asyncMailOutput: "assistant-final"`: Codex's native final
-reply becomes the email in the same conversation. Commentary, reasoning and tool
-logs remain internal; no second notification is drafted. Existing async
-configurations without the output field retain `queue-mail`, where only an
-explicit `queue_mail` call sends a decision, blocker, requested status or result.
+Use `asyncMailOutput: "assistant-final"`: the selected executor's native final
+reply becomes the email in the same conversation. New tasks' replies identify
+the executor. Commentary, reasoning and tool logs remain internal; no second
+notification is drafted. In `queue-mail` mode, only an explicit `queue_mail`
+call sends a decision, blocker, requested status or result.
 See [final replies and confirmations](docs/final-replies.md) and
-[architecture, cutover and validation](docs/async-cli.md).
+[async runtime details](docs/async-cli.md).
 
-**Image replies:** Codex can generate or copy PNG/JPEG files into the current
-task's `notes/mail-images/` directory and reference them with
+**Image replies:** either executor can generate or copy PNG/JPEG files into the
+current task's `notes/mail-images/` directory and reference them with
 `![Preview](mail-images/preview.png)` in its final reply. The controller freezes
 the actual bytes before queuing mail, renders images inline with CID MIME parts,
 and leaves the files available for saving in the mail client. Both assistant-final
-and existing queue-mail threads support this convention. Total image size is
+and queue-mail threads support this convention. Total image size is
 limited to 10 MiB. Invalid files hold the reply with a visible diagnostic; they
 are never replaced by a filename-only success message. See the
-[image rules and rollout checklist](docs/final-replies.md#image-replies).
+[image rules](docs/final-replies.md#image-replies).
 
 Administrator-configured [controlled operations](docs/controlled-operations.md)
 let the async controller run trusted inspection/backup scripts over SSH or another
-transport. Scripts and credentials stay private; Codex chooses only configured
+transport. Scripts and credentials stay private; the agent chooses only configured
 operations. Deployment can require verified prerequisites before its trusted
 script runs. This feature is disabled until an administrator configures it.
 Receipts retain verified backups and bounded deployment stage events; raw
 diagnostics stay private. An uncertain effect requires operator inspection and
 reconciliation before further writes, including after a controller upgrade.
 
-## Legacy engine usage
+Service restarts recover the task's original executor and native session.
+Uncertain mail delivery or external effects require operator inspection and
+reconciliation; they are never retried automatically. An executor failure does
+not authorize a session switch or permission expansion. Preserve native
+histories, approved worktrees and private guides across upgrades.
 
+## Validation
 
+Run `npm test` before handing off changes. For synthetic real-runtime acceptance
+on Linux, with the pinned executors available:
 
-Email a description of the project and requested change. A subject such as `NEW <project>:` can provide project context; Codex interprets it with the request. Reply to the latest proposal with `START`, then reply to the latest Review with `APPROVE`. Deployment uses a separate `DEPLOY <project>` confirmation after merge.
+```sh
+node scripts/verify-async-cli.mjs
+node scripts/verify-claude-cli.mjs
+node scripts/verify-async-sandbox.mjs
+```
 
-**Email notifications:** messages are sent when you need to answer a question,
-confirm a plan/Review/deployment, handle a blocker, or receive a final result.
-New-task acknowledgements, accepted feedback (including future requests), queued
-work, automatic reanalysis and document-stage merge progress are recorded in the
-private SQLite event log instead. A feedback reply produces one revised proposal
-or Review, without a separate success receipt. An explicit `STATUS` request gets
-one status response. Each new stage still needs a fresh `START`. Codex explicitly chooses whether a round needs human input or only an internal record; guard refusals never become questions automatically.
-
-Codex chooses technical details and reversible experience defaults from the code,
-existing conventions and confirmed preferences. Plan points explain those decisions.
-Real business, privacy, cost or irreversible tradeoffs arrive as human questions,
-with meaningful options, a recommendation and its costs. Missing facts are requested
-without invented answers. Execution confirmation is separate; choosing a recommendation
-does not authorize development, merge or deployment.
-
-Cross-repository execution uses the confirmed inventory of project IDs, Git identities
-and roles. Codex returns a structured scope decision; remaining work in an already
-approved repository continues under the same START. A single writable worktree does
-not mean the other targets need re-approval. New repositories or wider roles require
-a revised plan that explains the actual changes, followed by a fresh START. Legacy
-description-based repository requests receive one read-only semantic interpretation;
-invalid output is recorded internally without turning it into a confirmation request.
-See [scope continuation validation](docs/validation-scope.md) for the contract and
-synthetic acceptance.
-
-`STATUS`, `CANCEL` and `RETRY` are available in the task thread. All commands, including exact English commands and short acknowledgements, use the same Codex entry. `RUN` cannot bypass a concrete plan and fresh `START`. Email cancellation waits for interpretation; an operator can stop the service directly when Codex is unavailable. Uncertain sends, merges or deployments require reconciliation; they are not automatically retried. Old or quoted approvals cannot authorize a new version.
-
-See [configuration](docs/configuration.md), [operations and migration](docs/operations.md), and [validation](docs/validation.md).
+The model checks may incur account usage. They use synthetic projects and mail
+fixtures, without connecting a real mailbox or performing real PR, merge or
+deployment effects. Mail delivery and client threading still need actual
+owner-mail acceptance. See [dual executor validation](docs/validation-executors.md).
 
 ## License
 
