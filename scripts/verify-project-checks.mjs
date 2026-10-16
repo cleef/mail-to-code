@@ -2,7 +2,7 @@
 // mail identities and database contents are synthetic. No model, Gmail, GitHub
 // mutation, merge or deployment is invoked.
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, realpath, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import net from 'node:net';
@@ -25,6 +25,8 @@ const canary = net.createServer(socket => socket.end('HOST-CANARY'));
 await new Promise((resolve, reject) => { canary.once('error', reject); canary.listen(0, '127.0.0.1', resolve); });
 const port = canary.address().port, hostFile = join(root, 'host-canary'); await writeFile(hostFile, 'SYNTHETIC-HOST-ONLY');
 const store = new AsyncStore(join(dataDir, 'async-cli.sqlite'));
+const resources = async () => Promise.all([['pod', 'ps', '--filter', 'label=mail-to-code.owner=controller', '-q'], ['volume', 'ls', '-q']].map(async args => (await execute('podman', args)).stdout.trim().split('\n').filter(Boolean).sort()));
+const baseline = await resources();
 try {
     await git(tree, ['init', '-b', 'main']); await git(tree, ['remote', 'add', 'origin', 'https://github.com/example-org/synthetic-checks.git']);
     await writeFile(join(tree, '.gitignore'), 'node_modules/\npackage-lock.json\nignored-state.json\n');
@@ -66,15 +68,20 @@ try{
         const tools = new AsyncTools(config, store, c, new AbortController().signal);
         const call = (action, compatibility = false) => compatibility ? tools.call(c.executorSession, 'project_command', { project: 'sample', executable: 'mail-to-code-checks', args: [action] }) : tools.call(c.executorSession, 'project_checks', { project: 'sample', action });
         assert.deepEqual(await call('inspect', true), await call('inspect'));
+        await symlink(hostFile, join(tree, 'escape'));
+        const unsafe = await call('run'); assert.match(unsafe.error, /^TEST_COPY_UNSAFE_LINK:escape$/); assert.deepEqual(unsafe.checkIds, []);
+        await rm(join(tree, 'escape')); assert.deepEqual(await resources(), baseline);
         await writeFile(join(tree, 'mode.json'), JSON.stringify({ fail: true }));
         const failure = await call('run', executor === 'claude'); assert.equal(failure.ok, false); assert.deepEqual(failure.checkIds, []);
+        assert.match(failure.stderr, /intentional initial failure/); assert.deepEqual(await resources(), baseline);
         await writeFile(join(tree, 'mode.json'), JSON.stringify({ fail: false }));
         const success = await call('run', executor === 'claude'); assert.equal(success.ok, true, JSON.stringify(success));
         assert.equal(success.checkIds.length, 2); assert.ok(success.commands.some(c => c.stdout.includes('SYNTHETIC-MYSQL-BROWSER-PASSED')));
+        assert.deepEqual(await resources(), baseline);
         assert.equal((await call('inspect')).missing.length, 0);
         await writeFile(join(tree, 'mode.json'), JSON.stringify({ fail: true }));
         await assert.rejects(tools.call(c.executorSession, 'project_pr', { project: 'sample', summary: 'No actual PR is permitted in this acceptance.', checks: success.checkIds }), /CURRENT_SOURCE_CHECK_RECEIPTS_REQUIRED/);
-        results.push({ executor, compatibility: executor === 'claude', failedThenPassed: true, checks: success.checkIds.length, sourceChangeRejected: true });
+        results.push({ executor, compatibility: executor === 'claude', unsafeLinkRejected: true, resourcesCleaned: true, failedThenPassed: true, checks: success.checkIds.length, sourceChangeRejected: true });
     }
     assert.equal(store.mails().length, 0); assert.equal(store.all('operation').length, 0);
     console.log(JSON.stringify({ ok: true, platform: process.platform, codexVersion: ASYNC_CODEX_VERSION, browserImage, mysqlImage, results, realModelTurns: 0, externalEffects: 0 }, null, 2));
