@@ -214,7 +214,7 @@ test('PR blocks absent, legacy, foreign, configuration-stale and plain diagnosti
         let passed = await f.tools().call('primary', 'project_checks', { project: 'sample', action: 'run' }) as any;
         const id = passed.checkIds[0], receipt = f.store.get<CheckReceipt>('check', id)!;
         f.store.put('check', id, { ...receipt, fingerprint: undefined });
-        await assert.rejects(publish([id]), (e: any) => e.missing[0].reason === 'configuration_changed');
+        await assert.rejects(publish([id]), (e: any) => e.missing[0].reason === 'configuration_changed' && e.missing[0].command.executable === 'node');
         f.store.put('check', 'foreign:check', { ...receipt, id: 'foreign:check' }); await assert.rejects(publish(['foreign:check']), /CURRENT_SOURCE/);
         f.store.put('check', id, receipt);
         f.config.profiles.sample.checks[0].env.TEST_VALUE = 'new synthetic config';

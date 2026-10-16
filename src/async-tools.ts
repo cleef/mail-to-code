@@ -398,8 +398,11 @@ export class AsyncTools {
             s.summary = a.summary;
             const adapter = new GitAdapter(this.scopedConfig(), new Runner(this.config));
             const digest = await this.sourceDigest(s), plan = checkPlan(this.config, s.repo), receipts = a.checks.map((id: string) => id.startsWith(this.conversation.id + ':') ? this.store.get<CheckReceipt>('check', id) : undefined);
-            const invalid = receipts.map((r: CheckReceipt | undefined) => receiptProblem(r, s.repo, digest, plan.fingerprint)).filter(Boolean);
-            if (invalid.length) throw new CheckGateError('CURRENT_SOURCE_CHECK_RECEIPTS_REQUIRED', invalid.map((reason: string) => ({ reason })));
+            const invalid = receipts.flatMap((r: CheckReceipt | undefined) => {
+                const reason = receiptProblem(r, s.repo, digest, plan.fingerprint);
+                return reason ? [{ ...(r ? { command: { executable: r.executable, args: r.args, cwd: r.cwd } } : {}), reason }] : [];
+            });
+            if (invalid.length) throw new CheckGateError('CURRENT_SOURCE_CHECK_RECEIPTS_REQUIRED', invalid);
             const profile = plan.profile, missing = this.missingChecks(s, plan, digest, receipts);
             if (missing.length || !plan.required.length && profile.kind !== 'docs') throw new CheckGateError('REQUIRED_CHECKS_NOT_PASSED', missing.length ? missing : [{ reason: 'required_checks_not_configured' }]);
             const checks = receipts.map((r: any) => [r.executable, ...r.args].join(' ') + ' (passed; source ' + digest.slice(0, 12) + ')');

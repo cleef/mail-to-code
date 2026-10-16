@@ -32,6 +32,11 @@ jobs:
           # sandboxes and rootless Podman. No service-host policy is changed.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           npm install --global @openai/codex@0.159.2
+          # setup-node uses /opt, outside the existing minimal filesystem policy.
+          # Prepare the public tools under an allowed system path; keep the
+          # sandbox unchanged rather than exposing the hosted tool cache.
+          sudo cp -a "$(dirname "$(dirname "$(command -v node)")")" /usr/local/mail-check-node
+          echo /usr/local/mail-check-node/bin >> "$GITHUB_PATH"
           podman pull mcr.microsoft.com/playwright:v1.63.0-noble
           podman pull docker.io/library/mysql:8.4
           echo "CHECKS_BROWSER_IMAGE=$(podman image inspect mcr.microsoft.com/playwright:v1.63.0-noble --format '{{index .RepoDigests 0}}')" >> "$GITHUB_ENV"
