@@ -172,6 +172,9 @@ export class ProjectCheckRuntime {
             }, !!profile.image);
             if (await fileDigest(workspace, copiedFiles, true) !== before || await fileDigest(tree, copiedFiles, true) !== before) throw Error('CHECK_SOURCE_CHANGED');
             return outputs;
+        } catch (error) {
+            await writeFile(join(directory, 'failure.json'), JSON.stringify({ error: error instanceof Error ? error.message : 'CHECK_FAILED', stdout: (error as any).stdout || '', stderr: (error as any).stderr || '' }), { mode: 0o600 });
+            throw error;
         } finally {
             // Retain private diagnostics, never the copied source/dependencies.
             await rm(workspace, { recursive: true, force: true });

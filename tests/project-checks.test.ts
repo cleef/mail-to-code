@@ -129,12 +129,12 @@ test('services have an isolated network, health gating and unconditional cleanup
             const processCall: typeof execute = async (_cmd, args) => {
                 calls.push(args);
                 if (failure === 'create' && args[0] === 'pod' && args[1] === 'create') throw Error('PROCESS_TIMEOUT');
-                if (args[0] === 'exec' && failure === 'health') throw Error('not ready');
+                if (args[0] === 'exec' && failure === 'health') throw Object.assign(Error('not ready'), { stderr: 'synthetic health failure' });
                 return { stdout: '', stderr: '' };
             };
             const runtime = new RuntimeAdapter(f.config, new Runner(f.config), processCall, async () => {});
             let executed = false;
-            await assert.rejects(runtime.withServices(profile, abort.signal, async () => { executed = true; if (failure === 'cancel') abort.abort(); throw Error(failure === 'timeout' ? 'PROCESS_TIMEOUT' : failure === 'cancel' ? 'CANCELLED' : 'test failed'); }));
+            await assert.rejects(runtime.withServices(profile, abort.signal, async () => { executed = true; if (failure === 'cancel') abort.abort(); throw Error(failure === 'timeout' ? 'PROCESS_TIMEOUT' : failure === 'cancel' ? 'CANCELLED' : 'test failed'); }), (error: any) => failure !== 'health' || error.stderr === 'synthetic health failure');
             assert.equal(executed, !['health', 'create'].includes(failure));
             assert.ok(calls[0].includes('--network=none')); assert.deepEqual(calls.at(-1)!.slice(0, 4), ['pod', 'rm', '--ignore', '-f']);
             assert.equal(calls.filter(c => c[0] === 'exec').length, failure === 'health' ? 60 : failure === 'create' ? 0 : 1);

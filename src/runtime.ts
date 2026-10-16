@@ -75,19 +75,20 @@ export class RuntimeAdapter {
             for (const service of profile.services) {
                 const name = `${pod}-${service.name}`;
                 await this.process('podman', ['run', '--pull=never', '--rm', '-d', '--pod', pod, '--name', name, '--security-opt=no-new-privileges', ...Object.entries(service.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), service.image, ...service.args], { signal, timeoutMs: 30000 });
-                let healthy = false;
+                let healthy = false, lastHealthError: any;
                 for (let n = 0; n < 60; n++) {
                     signal.throwIfAborted();
                     try {
                         await this.process('podman', ['exec', name, ...service.health], { signal, timeoutMs: 3000 });
                         healthy = true;
                         break;
-                    } catch {
+                    } catch (error) {
+                        lastHealthError = error;
                         signal.throwIfAborted();
                         if (n < 59) await this.pause(1000);
                     }
                 }
-                if (!healthy) throw Error(`TEST_SERVICE_UNHEALTHY:${service.name}`);
+                if (!healthy) throw Object.assign(Error(`TEST_SERVICE_UNHEALTHY:${service.name}`), { stdout: lastHealthError?.stdout || '', stderr: lastHealthError?.stderr || '' });
             }
             return await run(pod);
         } finally {
