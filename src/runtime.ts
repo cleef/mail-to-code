@@ -38,7 +38,7 @@ export async function markdownChecks(tree: string) {
 }
 export class RuntimeAdapter {
     lastLogDirectory?: string;
-    constructor(readonly config: Config, readonly runner: Runner) { }
+    constructor(readonly config: Config, readonly runner: Runner, readonly process = execute, readonly pause = (ms: number) => new Promise(r => setTimeout(r, ms))) { }
     async cleanOrphans() { let pods: string; try {
         pods = (await execute('podman', ['pod', 'ps', '--filter', 'label=mail-to-code.owner=controller', '--format', '{{.Name}}'], { timeoutMs: 30000 })).stdout;
     }
@@ -53,16 +53,47 @@ export class RuntimeAdapter {
     } }
     async verify(profile: ProjectProfile) {
         if (profile.image) {
-            await execute('podman', ['image', 'exists', profile.image], { timeoutMs: 30000 });
+            await this.process('podman', ['image', 'exists', profile.image], { timeoutMs: 30000 });
         }
         else
             for (const name of profile.runtime) {
                 if (!/^[a-zA-Z0-9._-]+$/.test(name))
                     throw new Error('Invalid runtime executable');
-                await execute(name, ['--version'], { timeoutMs: 30000 });
+                await this.process(name, ['--version'], { timeoutMs: 30000 });
             }
         for (const s of profile.services)
-            await execute('podman', ['image', 'exists', s.image], { timeoutMs: 30000 });
+            await this.process('podman', ['image', 'exists', s.image], { timeoutMs: 30000 });
+    }
+    // Only the controller starts services. Callers choose what workspace, if any,
+    // a test process receives; services themselves have no host bind mounts.
+    async withServices<T>(profile: ProjectProfile, signal: AbortSignal, run: (pod?: string) => Promise<T>, forcePod = false): Promise<T> {
+        if (!profile.services.length && !forcePod) return run();
+        const pod = `mail-to-code-${randomUUID()}`;
+        try {
+            signal.throwIfAborted();
+            await this.process('podman', ['pod', 'create', '--name', pod, '--network=none', '--userns=keep-id', '--label=mail-to-code.owner=controller'], { signal, timeoutMs: 30000 });
+            for (const service of profile.services) {
+                const name = `${pod}-${service.name}`;
+                await this.process('podman', ['run', '--pull=never', '--rm', '-d', '--pod', pod, '--name', name, '--security-opt=no-new-privileges', ...Object.entries(service.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), service.image, ...service.args], { signal, timeoutMs: 30000 });
+                let healthy = false;
+                for (let n = 0; n < 60; n++) {
+                    signal.throwIfAborted();
+                    try {
+                        await this.process('podman', ['exec', name, ...service.health], { signal, timeoutMs: 3000 });
+                        healthy = true;
+                        break;
+                    } catch {
+                        signal.throwIfAborted();
+                        if (n < 59) await this.pause(1000);
+                    }
+                }
+                if (!healthy) throw Error(`TEST_SERVICE_UNHEALTHY:${service.name}`);
+            }
+            return await run(pod);
+        } finally {
+            // Also covers interrupted/uncertain creation. Never reuse a test Pod.
+            await this.process('podman', ['pod', 'rm', '--ignore', '-f', pod], { timeoutMs: 30000 });
+        }
     }
     async run(tree: string, profile: ProjectProfile, signal: AbortSignal, deployment=false) {
         tree = await realpath(tree);
@@ -94,38 +125,13 @@ export class RuntimeAdapter {
             const output = await this.runner.check(tree, c.executable, c.args, cwd, signal, true, { env: c.env, sources: profile.packageSources });
             await log(c, output);
         }
-        const pod = `mail-to-code-${randomUUID()}`, containers: string[] = [];
-        let made = false;
-        try {
-            if (profile.services.length) {
-                made = true;
-                await execute('podman', ['pod', 'create', '--name', pod, '--network=none', '--userns=keep-id', '--label=mail-to-code.owner=controller'], { signal });
-                for (const s of profile.services) {
-                    const name = `${pod}-${s.name}`;
-                    await execute('podman', ['run', '-d', '--pod', pod, '--name', name, '--security-opt=no-new-privileges', ...Object.entries(s.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), s.image, ...s.args], { signal });
-                    containers.push(name);
-                    let healthy = false;
-                    for (let n = 0; n < 30; n++) {
-                        signal.throwIfAborted();
-                        try {
-                            await execute('podman', ['exec', name, ...s.health], { signal, timeoutMs: 3000 });
-                            healthy = true;
-                            break;
-                        }
-                        catch {
-                            await new Promise(r => setTimeout(r, 500));
-                        }
-                    }
-                    if (!healthy)
-                        throw new Error(`Temporary service ${s.name} failed health check`);
-                }
-            }
+        return this.withServices(profile, signal, async pod => {
             for (const c of [...profile.build, ...profile.checks]) {
                 const cwd = await realpath(resolve(tree, c.cwd));
                 if (cwd !== tree && !cwd.startsWith(tree + '/'))
                     throw new Error('Step escapes worktree');
                 if (profile.image) {
-                    const args = ['run', '--rm', '--read-only', '--cap-drop=all', '--security-opt=no-new-privileges', ...(made ? ['--user', `${process.getuid!()}:${process.getgid!()}`] : ['--userns=keep-id']), '--tmpfs', '/tmp:rw,size=512m', ...(made ? ['--pod', pod] : ['--network=none']), '-v', `${tree}:/workspace:rw,Z`, '-w', `/workspace/${c.cwd}`, ...Object.entries(c.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), profile.image, c.executable, ...c.args];
+                    const args = ['run', '--pull=never', '--rm', '--read-only', '--cap-drop=all', '--security-opt=no-new-privileges', ...(pod ? ['--user', `${process.getuid!()}:${process.getgid!()}`] : ['--userns=keep-id']), '--tmpfs', '/tmp:rw,size=512m', ...(pod ? ['--pod', pod] : ['--network=none']), '-v', `${tree}:/workspace:rw,Z`, '-w', `/workspace/${c.cwd}`, ...Object.entries(c.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), profile.image, c.executable, ...c.args];
                     const output = await execute('podman', args, { signal, timeoutMs: this.config.timeoutSeconds * 1000 });
                     await log(c, output);
                 }
@@ -141,10 +147,6 @@ export class RuntimeAdapter {
                 if(changed.length)await git(tree,['restore','--source=HEAD','--',...changed]);
             }
             return checks;
-        }
-        finally {
-            if (made)
-                await execute('podman', ['pod', 'rm', '-f', pod], { timeoutMs: 30000 });
-        }
+        });
     }
 }

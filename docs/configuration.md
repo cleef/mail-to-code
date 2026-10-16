@@ -42,7 +42,7 @@ unavailable to native tools. Edited private guides are never overwritten.
 }
 ```
 
-Profiles describe install/build/check steps, runtimes, package sources, preview mounts, routes, synthetic fixtures and optional pinned test containers. Commands run inside the approved worktree and sandbox. Declare generated tracked files in `generatedFiles` if a deployment build must restore those outputs before verifying the exact approved source commit. Undeclared changes fail deployment.
+Profiles describe install/build/check steps, runtimes, package sources, preview mounts, routes, synthetic fixtures and optional pinned test containers. Async `project_checks` runs these checks in a sanitized worktree copy and applies each command's `env`; `image` and `services` enable isolated container tests. See [configured checks](project-checks.md) for readiness, receipts and old-session compatibility. Declare generated tracked files in `generatedFiles` if a deployment build must restore those outputs before verifying the exact approved source commit. Undeclared changes fail deployment.
 
 Profiles are inferred from immutable default-branch snapshots, or supplied explicitly in the private configuration. Explicit profiles are not overwritten by model proposals. Changed configuration requires fresh approval. The configured product document repository uses Markdown validation and is merged last when recording product evidence.
 

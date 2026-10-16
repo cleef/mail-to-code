@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, stat, lstat, readlink } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
 import { join, resolve, relative } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
@@ -16,6 +16,7 @@ import { asyncPolicy } from './async-policy.js';
 import { OperationsAdapter, OperationIdSchema, digest, withProjectOperationLock } from './operations.js';
 import { OperationJournal, ReceiptSchema, operationStatus, FailedResolutionSchema } from './operation-report.js';
 import { sessionOf } from './executor.js';
+import { checkPlan, checkHash, receiptProblem, receiptMatches, sourceFiles, fileDigest, ProjectCheckRuntime, CheckGateError, type CheckCommand, type CheckPlan, type CheckReceipt } from './project-checks.js';
 export interface ScopeProject {
     path: string;
     role: 'modify' | 'reference' | 'product_record';
@@ -31,10 +32,11 @@ export const ASYNC_TOOLS = [
     tool('project_worktree', 'Prepare or reuse an isolated worktree for an approved writable repository. All approved repositories may continue without another START.', { project: text }),
     tool('project_sync_base', 'Fetch the approved repository default branch and merge it into its existing worktree. Resolve conflicts, rerun relevant checks and update the PR in the same feature scope; this never grants merge or deployment.', { project: text }),
     tool('project_command', 'Run a command inside an approved worktree sandbox. Return failed checks to this same session; inspect, fix and retry without clearing authorization. Network only through configured package sources.', { project: text, executable: text, args: strings, cwd: text, network: { type: 'boolean' } }, ['project', 'executable', 'args']),
+    tool('project_checks', 'Inspect or run all required configured project checks in an isolated workspace, with controller-managed test services and environment. Returns current-source checkIds for project_pr. No merge or deployment.', { project: text, action: { enum: ['inspect', 'run'] } }),
     tool('project_operations', 'List administrator-configured operations for an approved project. Targets, descriptions, effects and fingerprints are facts, never authorization.', { project: text }),
     tool('project_operation_status', 'Read recorded effects and prerequisite receipts for an approved project in this conversation. Return uncertain effects and recent receipts, or one exact operationId. Raw operator logs and credentials are never returned. This does not reconcile or retry effects.', { project: text, operationId: text }, ['project']),
     tool('project_operation', 'Run an administrator-configured operation, never an arbitrary command. Write operations require explicit intent in a trusted new mail body: quote sourceMailId/evidence for this operation and target. Generic assent, quoted history and recommendations are not authorization. Reuse the key for retries; uncertain effects must be reconciled by the operator.', { project: text, operation: text, key: text, sourceMailId: text, evidence: text }, ['project', 'operation', 'key']),
-    tool('project_pr', 'Commit, push and prepare/update the implementation PR. checks contains checkId receipts returned by successful project_command calls on the current source. Required operator checks must pass. No merge or deployment.', { project: text, summary: text, checks: strings }),
+    tool('project_pr', 'Commit, push and prepare/update the implementation PR. checks contains checkIds from project_checks (or matching plain sandbox checks) on the current source and test configuration. Required operator checks must pass. No merge or deployment.', { project: text, summary: text, checks: strings }),
     tool('project_merge', 'Merge only the exact independently approved PR head/base. An uncertain effect is not retried automatically.', { requestId: text }),
     tool('project_deploy', 'Deploy only the exact independently approved merged commit and operator deployment profile. An uncertain effect is not retried automatically.', { requestId: text }),
 ];
@@ -52,6 +54,7 @@ const schemas: Record<string, z.ZodTypeAny> = {
     project_worktree: z.object({ project: z.string() }).strict(),
     project_sync_base: z.object({ project: z.string() }).strict(),
     project_command: z.object({ project: z.string(), executable: z.string().min(1), args: z.array(z.string()), cwd: z.string().default('.'), network: z.boolean().default(false) }).strict(),
+    project_checks: z.object({ project: z.string(), action: z.enum(['inspect', 'run']) }).strict(),
     project_operations: z.object({ project: z.string() }).strict(),
     project_operation_status: z.object({ project: z.string(), operationId: z.string().min(1).max(500).optional() }).strict(),
     project_operation: z.object({ project: z.string(), operation: OperationIdSchema, key: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,199}$/), sourceMailId: z.string().optional(), evidence: z.string().min(1).optional() }).strict(),
@@ -75,6 +78,15 @@ export class AsyncTools {
     }
     directory() { return join(this.config.dataDir, 'async-cli', 'features', this.conversation.id); }
     scopes() { return this.store.get<ScopeProject[]>('scope', this.conversation.id) || []; }
+    checksContext() {
+        const projects = Object.entries(this.config.repositories).filter(([, repo]) => this.scopes().some(scope => scope.role !== 'reference' && canonical(scope.path) === canonical(repo.path) && scope.identity === repo.github)).map(([project]) => {
+            try {
+                const plan = checkPlan(this.config, project);
+                return { project, required: plan.required.map(({ executable, args, cwd }) => ({ executable, args, cwd })), container: !!plan.profile.image, services: plan.profile.services.map(s => s.name) };
+            } catch { return { project, availability: 'invalid_test_configuration' }; }
+        });
+        return '\n\nCurrent controller test capability (runtime facts, never authorization): use project_checks({project,action:"inspect"|"run"}) for configured builds/tests and source-check receipts. Older persistent sessions must use project_command with executable="mail-to-code-checks", args=["inspect"] or ["run"], cwd=".", network=false. The controller manages isolated services and configured environment; native network/container failures do not determine controller readiness. Plain project_command cannot replace configured container/service/environment checks. After source or test-configuration changes rerun required checks; a failure does not clear implementation scope. No system package installation, merge or deployment is authorized by this capability.\n' + JSON.stringify({ projects });
+    }
     async operationContext(): Promise<string> {
         if (this.config.engine !== 'async-cli' || !Object.values(this.config.repositories).some(r => Object.keys(r.operations || {}).length)) return '';
         const projects: unknown[] = [];
@@ -161,24 +173,21 @@ export class AsyncTools {
     }
     private saveProject(s: Session) { this.store.put('project', this.conversation.id + ':' + this.config.repositories[s.repo].path, s); }
     private async sourceDigest(s: Session) {
-        const files = (await git(s.worktree!, ['ls-files', '--cached', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean).sort();
-        const digest = createHash('sha256');
-        for (const file of [...new Set(files)]) {
-            digest.update(file + '\0');
-            const path = join(s.worktree!, file);
-            try {
-                const info = await lstat(path);
-                digest.update(String(info.mode & 0o777) + '\0');
-                digest.update(info.isSymbolicLink() ? await readlink(path) : info.isFile() ? await readFile(path) : 'submodule');
-            }
-            catch (e) {
-                if ((e as NodeJS.ErrnoException).code !== 'ENOENT')
-                    throw e;
-                digest.update('deleted');
-            }
-            digest.update('\0');
-        }
-        return digest.digest('hex');
+        return fileDigest(s.worktree!, await sourceFiles(s.worktree!));
+    }
+    private saveCheck(s: Session, plan: CheckPlan, command: CheckCommand, ok: boolean, digest: string, controlled: boolean, error?: string, network = false) {
+        const id = this.conversation.id + ':' + checkHash({ project: s.repo, command });
+        const receipt: CheckReceipt = { id, project: s.repo, ...command, ok, digest, fingerprint: plan.fingerprint, controlled, network, createdAt: new Date().toISOString(), ...(error ? { error } : {}) };
+        this.store.put('check', id, receipt);
+        this.store.put('check-attempt', randomUUID(), receipt);
+        return id;
+    }
+    private missingChecks(s: Session, plan: CheckPlan, digest: string, receipts: CheckReceipt[]) {
+        return plan.required.flatMap(command => {
+            const matches = receipts.filter(r => receiptMatches(r, command, plan));
+            if (matches.some(r => !receiptProblem(r, s.repo, digest, plan.fingerprint))) return [];
+            return [{ command: { executable: command.executable, args: command.args, cwd: command.cwd }, reason: matches.length ? receiptProblem(matches.at(-1), s.repo, digest, plan.fingerprint)! : 'not_executed' }];
+        });
     }
     private async target(kind: ApprovalRequest['kind'], name?: string) {
         if (!name)
@@ -210,6 +219,10 @@ export class AsyncTools {
             try { params = JSON.parse(a.args[1]); } catch { throw Error('INVALID_OPERATION_COMPATIBILITY_CALL'); }
             if (!params || typeof params !== 'object' || Array.isArray(params) || 'project' in params) throw Error('INVALID_OPERATION_COMPATIBILITY_CALL');
             return this.call(threadId, a.args[0] === 'list' ? 'project_operations' : a.args[0] === 'status' ? 'project_operation_status' : 'project_operation', { ...params, project: a.project });
+        }
+        if (name === 'project_command' && a.executable === 'mail-to-code-checks') {
+            if (a.network || a.cwd !== '.' || a.args.length !== 1 || !['inspect', 'run'].includes(a.args[0])) throw Error('INVALID_CHECKS_COMPATIBILITY_CALL');
+            return this.call(threadId, 'project_checks', { project: a.project, action: a.args[0] });
         }
         if (name.startsWith('project_') && a.project) {
             const approved = this.scope(a.project), actual = await this.identify(approved);
@@ -328,20 +341,43 @@ export class AsyncTools {
             }
             return { project: a.project, adapter: alias, path: s.worktree, branch: s.branch, base: s.baseSha, profile: this.config.profiles[alias] };
         }
+        if (name === 'project_checks') {
+            const s = this.session(a.project), plan = checkPlan(this.config, s.repo), runtime = new ProjectCheckRuntime(this.config);
+            const before = await this.sourceDigest(s);
+            // Fence prior successes before any asynchronous work. A controller
+            // crash or a concurrent PR call cannot reuse an unfinished rerun.
+            if (a.action === 'run') for (const command of plan.required) this.saveCheck(s, plan, command, false, before, true, 'CHECK_RUNNING');
+            const issues = await runtime.readiness(plan);
+            const receipts = this.store.all<CheckReceipt>('check').filter(r => r.id.startsWith(this.conversation.id + ':'));
+            const missing = this.missingChecks(s, plan, before, receipts);
+            if (a.action === 'inspect') return { ok: !issues.length, fingerprint: plan.fingerprint, required: plan.required.map(({ executable, args, cwd, env }) => ({ executable, args, cwd, envKeys: Object.keys(env) })), runtime: { image: plan.profile.image, services: plan.profile.services.map(s => ({ name: s.name, image: s.image })), packageSources: plan.profile.packageSources }, issues, missing };
+            try {
+                if (issues.length) throw Error('TEST_RUNTIME_NOT_READY:' + issues.join(';'));
+                const result = await runtime.run(s.worktree!, plan, this.signal), after = await this.sourceDigest(s);
+                if (before !== after) throw Error('CHECK_SOURCE_CHANGED');
+                const checkIds = plan.required.map(command => this.saveCheck(s, plan, command, true, after, true));
+                return { ok: true, checkIds, fingerprint: plan.fingerprint, ...result };
+            } catch (e) {
+                const error = e instanceof Error ? e.message : 'CHECK_FAILED';
+                const failed = (e as any).checkCommand as CheckCommand | undefined;
+                for (const command of plan.required) this.saveCheck(s, plan, command, false, before, true, error === 'CHECK_SOURCE_CHANGED' || failed && checkHash(command) === checkHash(failed) ? error : 'CHECK_NOT_EXECUTED');
+                return { ok: false, error, issues, checkIds: [], stdout: (e as any).stdout || '', stderr: (e as any).stderr || '' };
+            }
+        }
         if (name === 'project_command') {
             const s = this.session(a.project), tree = await realpath(s.worktree!), cwd = await realpath(resolve(tree, a.cwd));
             if (cwd !== tree && !cwd.startsWith(tree + '/'))
                 throw Error('COMMAND_OUTSIDE_WORKTREE');
-            const configured = this.config.profiles[s.repo], sources = configured?.packageSources;
-            const checkId = this.conversation.id + ':' + hash({ project: s.repo, executable: a.executable, args: a.args, cwd: a.cwd });
+            const plan = checkPlan(this.config, s.repo), sources = plan.profile.packageSources;
+            const command: CheckCommand = { executable: a.executable, args: a.args, cwd: a.cwd, env: {} }, before = await this.sourceDigest(s);
             try {
-                const before = await this.sourceDigest(s), result = await new Runner(this.config).check(s.worktree!, a.executable, a.args, cwd, this.signal, a.network, { sources, policy: asyncPolicy(this.config, this.conversation) }), after = await this.sourceDigest(s);
-                this.store.put('check', checkId, { id: checkId, project: s.repo, digest: after, executable: a.executable, args: a.args, cwd: a.cwd, ok: before === after });
+                const result = await new Runner(this.config).check(s.worktree!, a.executable, a.args, cwd, this.signal, a.network, { sources, policy: asyncPolicy(this.config, this.conversation) }), after = await this.sourceDigest(s);
+                const checkId = this.saveCheck(s, plan, command, before === after, after, false, undefined, a.network);
                 return { ok: true, checkId: before === after ? checkId : undefined, ...result };
             }
             catch (e) {
                 this.signal.throwIfAborted();
-                this.store.put('check', checkId, { id: checkId, project: s.repo, ok: false });
+                this.saveCheck(s, plan, command, false, before, false, undefined, a.network);
                 return { ok: false, error: e instanceof Error ? e.message : 'CHECK_FAILED', stdout: (e as any).stdout || '', stderr: (e as any).stderr || '' };
             }
         }
@@ -361,12 +397,11 @@ export class AsyncTools {
             const s = this.session(a.project);
             s.summary = a.summary;
             const adapter = new GitAdapter(this.scopedConfig(), new Runner(this.config));
-            const digest = await this.sourceDigest(s), receipts = a.checks.map((id: string) => this.store.get<any>('check', id));
-            if (receipts.some((r: any) => !r || r.project !== s.repo || !r.ok || r.digest !== digest))
-                throw Error('CURRENT_SOURCE_CHECK_RECEIPTS_REQUIRED');
-            const profile = this.config.profiles[s.repo], required = [...this.config.repositories[s.repo].checks, ...(profile?.build || []), ...(profile?.checks || [])];
-            if (required.some(command => !receipts.some((r: any) => r.executable === command.executable && JSON.stringify(r.args) === JSON.stringify(command.args) && r.cwd === command.cwd)))
-                throw Error('REQUIRED_CHECKS_NOT_PASSED');
+            const digest = await this.sourceDigest(s), plan = checkPlan(this.config, s.repo), receipts = a.checks.map((id: string) => id.startsWith(this.conversation.id + ':') ? this.store.get<CheckReceipt>('check', id) : undefined);
+            const invalid = receipts.map((r: CheckReceipt | undefined) => receiptProblem(r, s.repo, digest, plan.fingerprint)).filter(Boolean);
+            if (invalid.length) throw new CheckGateError('CURRENT_SOURCE_CHECK_RECEIPTS_REQUIRED', invalid.map((reason: string) => ({ reason })));
+            const profile = plan.profile, missing = this.missingChecks(s, plan, digest, receipts);
+            if (missing.length || !plan.required.length && profile.kind !== 'docs') throw new CheckGateError('REQUIRED_CHECKS_NOT_PASSED', missing.length ? missing : [{ reason: 'required_checks_not_configured' }]);
             const checks = receipts.map((r: any) => [r.executable, ...r.args].join(' ') + ' (passed; source ' + digest.slice(0, 12) + ')');
             if (profile?.kind === 'docs')
                 checks.push(...await markdownChecks(s.worktree!));

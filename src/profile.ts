@@ -19,7 +19,7 @@ export function validateProfile(input: unknown): ProjectProfile {
         if (/[\r\n\0]/.test(c.executable) || /^(ssh|sudo|su|podman|docker|systemctl|gh|git)$/.test(c.executable.split('/').at(-1)!))
             throw new Error('Privileged/controller commands cannot be profile steps');
         for (const k of Object.keys(c.env))
-            if (/TOKEN|SECRET|PASSWORD|PRIVATE|SSH|GH_|GITHUB|GMAIL|MAIL_TO_CODE|MAIL_AGENT|CODEX_HOME|LD_PRELOAD|NODE_OPTIONS/.test(k))
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || /TOKEN|SECRET|PASSWORD|PRIVATE|SSH|GH_|GITHUB|GMAIL|MAIL_TO_CODE|MAIL_AGENT|CODEX_HOME|LD_PRELOAD|NODE_OPTIONS/i.test(k))
                 throw new Error('Profile environment cannot contain credentials or runtime injection');
     }
     for(const path of p.generatedFiles)if(!path||path==='.'||path.split('/').some(v=>['.git','.codex','.agents','node_modules'].includes(v)))throw Error('Invalid generated source file');
@@ -27,7 +27,7 @@ export function validateProfile(input: unknown): ProjectProfile {
         throw new Error('Local services require a pinned test runtime image');
     for (const service of p.services)
         for (const k of Object.keys(service.env))
-            if (/TOKEN|SECRET|PRIVATE|SSH|GH_|GITHUB|GMAIL/.test(k))
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || /TOKEN|SECRET|PRIVATE|SSH|GH_|GITHUB|GMAIL/i.test(k))
                 throw new Error('Service credentials must be synthetic test data');
     for (const path of p.preview.paths)
         if (!path.startsWith('/') || path.startsWith('//'))
