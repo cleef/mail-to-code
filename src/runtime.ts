@@ -69,6 +69,7 @@ export class RuntimeAdapter {
     async withServices<T>(profile: ProjectProfile, signal: AbortSignal, run: (pod?: string) => Promise<T>, forcePod = false): Promise<T> {
         if (!profile.services.length && !forcePod) return run();
         const pod = `mail-to-code-${randomUUID()}`;
+        let primaryError: any;
         try {
             signal.throwIfAborted();
             await this.process('podman', ['pod', 'create', '--name', pod, '--network=none', '--userns=keep-id', '--label=mail-to-code.owner=controller'], { signal, timeoutMs: 30000 });
@@ -91,9 +92,19 @@ export class RuntimeAdapter {
                 if (!healthy) throw Object.assign(Error(`TEST_SERVICE_UNHEALTHY:${service.name}`), { stdout: lastHealthError?.stdout || '', stderr: lastHealthError?.stderr || '' });
             }
             return await run(pod);
+        } catch (error) {
+            primaryError = error;
+            throw error;
         } finally {
             // Also covers interrupted/uncertain creation. Never reuse a test Pod.
-            await this.process('podman', ['pod', 'rm', '--ignore', '-f', pod], { timeoutMs: 30000 });
+            try {
+                await this.process('podman', ['pod', 'rm', '--ignore', '-f', pod], { timeoutMs: 30000 });
+            } catch (cleanupError) {
+                if (!primaryError) throw cleanupError;
+                // Keep the failed assertion/health check when cleanup also
+                // fails; both diagnostics are needed to repair infrastructure.
+                primaryError.stderr = [primaryError.stderr || '', 'TEST_CLEANUP_FAILED', (cleanupError as any).stderr || String(cleanupError)].join('\n');
+            }
         }
     }
     async run(tree: string, profile: ProjectProfile, signal: AbortSignal, deployment=false) {

@@ -124,17 +124,18 @@ test('services have an isolated network, health gating and unconditional cleanup
     const f = await fixture();
     try {
         const profile = ProfileSchema.parse({ image, services: [service], checks: [command] });
-        for (const failure of ['health', 'test', 'timeout', 'cancel', 'create']) {
+        for (const failure of ['health', 'test', 'timeout', 'cancel', 'create', 'cleanup']) {
             const calls: string[][] = [], abort = new AbortController();
             const processCall: typeof execute = async (_cmd, args) => {
                 calls.push(args);
                 if (failure === 'create' && args[0] === 'pod' && args[1] === 'create') throw Error('PROCESS_TIMEOUT');
+                if (failure === 'cleanup' && args[0] === 'pod' && args[1] === 'rm') throw Object.assign(Error('cleanup failed'), { stderr: 'synthetic cleanup failure' });
                 if (args[0] === 'exec' && failure === 'health') throw Object.assign(Error('not ready'), { stderr: 'synthetic health failure' });
                 return { stdout: '', stderr: '' };
             };
             const runtime = new RuntimeAdapter(f.config, new Runner(f.config), processCall, async () => {});
             let executed = false;
-            await assert.rejects(runtime.withServices(profile, abort.signal, async () => { executed = true; if (failure === 'cancel') abort.abort(); throw Error(failure === 'timeout' ? 'PROCESS_TIMEOUT' : failure === 'cancel' ? 'CANCELLED' : 'test failed'); }), (error: any) => failure !== 'health' || error.stderr === 'synthetic health failure');
+            await assert.rejects(runtime.withServices(profile, abort.signal, async () => { executed = true; if (failure === 'cancel') abort.abort(); throw Error(failure === 'timeout' ? 'PROCESS_TIMEOUT' : failure === 'cancel' ? 'CANCELLED' : 'test failed'); }), (error: any) => failure === 'health' ? error.stderr === 'synthetic health failure' : failure !== 'cleanup' || error.message === 'test failed' && error.stderr.includes('TEST_CLEANUP_FAILED'));
             assert.equal(executed, !['health', 'create'].includes(failure));
             assert.ok(calls[0].includes('--network=none')); assert.deepEqual(calls.at(-1)!.slice(0, 4), ['pod', 'rm', '--ignore', '-f']);
             assert.equal(calls.filter(c => c[0] === 'exec').length, failure === 'health' ? 60 : failure === 'create' ? 0 : 1);
@@ -143,6 +144,8 @@ test('services have an isolated network, health gating and unconditional cleanup
         const runtime = new RuntimeAdapter(f.config, new Runner(f.config), async (_cmd, args) => { if (args[0] === 'pod' && args[1] === 'create') pods.push(args[3]); return { stdout: '', stderr: '' }; });
         await Promise.all([runtime.withServices(profile, new AbortController().signal, async () => {}), runtime.withServices(profile, new AbortController().signal, async () => {})]);
         assert.equal(new Set(pods).size, 2);
+        const cleanupFailure = new RuntimeAdapter(f.config, new Runner(f.config), async (_cmd, args) => { if (args[0] === 'pod' && args[1] === 'rm') throw Error('CLEANUP_FAILED'); return { stdout: '', stderr: '' }; });
+        await assert.rejects(cleanupFailure.withServices(profile, new AbortController().signal, async () => 'passed'), /CLEANUP_FAILED/);
     } finally { await f.close(); }
 });
 
