@@ -74,7 +74,7 @@ export class AppServer extends EventEmitter implements Rpc {
             this.pending.delete(m.id);
             clearTimeout(p.timer);
             if (m.error)
-                p.reject(Error(m.error.message || 'APP_SERVER_RPC_ERROR'));
+                p.reject(Object.assign(new Error(m.error.message || 'APP_SERVER_RPC_ERROR', { cause: m.error.data }), Number.isInteger(m.error.code) ? { rpcCode: m.error.code } : {}));
             else
                 p.resolve(m.result);
         }

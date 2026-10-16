@@ -60,6 +60,11 @@ body separately from the exact quoted parent, plus recipient, sender, SENT
 label, thread, attachments, delivery marker and actual RFC Message-ID. No CC/BCC
 is allowed. Uncertain sends are reconciled by reading/searching sent mail and
 are never automatically retried; unverified notices grant no execution authority.
+Async delivery failures retain private provider/RPC evidence and expose separate
+send and reconciliation diagnostics. A healthy profile check does not imply a
+healthy outbox; inspect `doctor`'s `deliveryBlocked` and `async-status`. See
+[outbound mail diagnostics](async-cli.md#outbound-mail-diagnostics) for read-only
+inspection and stopped-service recovery.
 
 ## Existing installations
 

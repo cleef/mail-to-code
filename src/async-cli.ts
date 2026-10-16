@@ -27,6 +27,7 @@ import { verifyFrozenMailImages } from './mail-images.js';
 import { operationStatus, safeError } from './operation-report.js';
 import { executorOf, executorLabel, sessionOf, type ExecutorClient as Client, type ClientFactory } from './executor.js';
 import { CheckGateError, ProjectCheckRuntime, checkPlan } from './project-checks.js';
+import { blockedMail, mailDiagnostic, mailStatus, privateMailError, type MailPhase } from './mail-diagnostics.js';
 export type { ExecutorClient as Client, ClientFactory } from './executor.js';
 export { asyncPolicy } from './async-policy.js';
 export const ASYNC_CODEX_VERSION = '0.159.2';
@@ -352,13 +353,22 @@ export class AsyncBridge {
                     c.gmailThread = s.threadId;
                 this.store.save(c);
             } };
-        return new Delivery(this.config, view as unknown as import('./store.js').Store, this.mail);
+        return new Delivery(this.config, view as unknown as import('./store.js').Store, this.mail, (m,error,phase) => this.auditMailError(m,error,phase));
+    }
+    private auditMailError(m: Outbound, error: unknown, phase: MailPhase) {
+        const diagnostic = mailDiagnostic(m,phase,error);
+        // Keep the first failure for each attempt/phase, even if reconciliation
+        // later succeeds or another lookup reports a different failure.
+        if (!this.store.get('mail-error',diagnostic.auditId))
+            this.store.put('mail-error',diagnostic.auditId,{mailId:m.id,diagnostic,error:privateMailError(error)});
+        return diagnostic;
     }
     async flush() {
         const delivery = this.delivery();
         for (const m of this.store.mails()) {
             if (m.status === 'sending') {
                 m.status = 'uncertain';
+                m.lastError ||= 'MAIL_SEND_INTERRUPTED_OUTCOME_UNKNOWN';
                 this.store.saveMail(m);
             }
             if (m.status === 'uncertain' || m.status === 'sent' && m.identityStatus !== 'verified') {
@@ -373,14 +383,14 @@ export class AsyncBridge {
             try {verifyFrozenMailImages(this.config.dataDir,m);}
             catch {m.lastError='MAIL_IMAGE_FROZEN_COPY_INVALID';this.store.saveMail(m);continue;}
             if(this.mail.prepareReply&&!m.replyMessageId){
-                if(!latest)throw Error('MAIL_REPLY_PARENT_MISSING');
                 try {
+                    if(!latest)throw Error('MAIL_REPLY_PARENT_MISSING');
                     const frozen=await this.mail.prepareReply(latest.id,m.attachments);
                     if(m.attachmentHashes&&JSON.stringify(m.attachmentHashes)!==JSON.stringify(frozen.attachmentHashes))throw Error('MAIL_ATTACHMENT_SNAPSHOT_CHANGED');
                     m.replyMessageId=latest.id;m.replyParentRfcId=frozen.rfcId;m.replyQuoteHash=frozen.quoteHash;m.attachmentHashes=frozen.attachmentHashes;m.threadId=frozen.threadId;
                     this.store.saveMail(m);
                 } catch(error) {
-                    m.lastError=error instanceof Error&&/^MAIL_/.test(error.message)?error.message:'MAIL_REPLY_PREPARATION_FAILED';this.store.saveMail(m);continue;
+                    m.sendDiagnostic=this.auditMailError(m,error,'prepare');m.lastError=m.sendDiagnostic.code;this.store.saveMail(m);continue;
                 }
             }
             m.status = 'sending';
@@ -391,14 +401,23 @@ export class AsyncBridge {
             try {
                 const hit = await this.mail.send({ replyMessageId:m.replyMessageId, to: this.config.ownerAddress, subject: c.subject, text: m.text, bodySnapshot:m.bodySnapshot, markdown: true, deliveryMarker: m.deliveryMarker, threadId: m.threadId, inReplyTo: latest?.incoming.rfcId, references: latest?.incoming.references,attachments:m.attachments,attachmentHashes:m.attachmentHashes });
                 m.gmailId = hit.id;
+                m.threadId = hit.threadId;
                 m.status = 'sent';
+                m.sentAt = new Date().toISOString();
+                m.identityStatus = 'pending';
+                m.lastError = undefined;
+                m.sendDiagnostic = undefined;
                 this.store.saveMail(m);
-                await delivery.reconcile(m);
             }
-            catch {
+            catch (error) {
                 m.status = 'uncertain';
+                m.sendDiagnostic = this.auditMailError(m,error,'send');
+                m.lastError = m.sendDiagnostic.code;
                 this.store.saveMail(m);
+                continue;
             }
+            // A verification failure must not erase a known send receipt.
+            await delivery.reconcile(m);
         }
     }
     async reconcileSend(id: string, verifiedAbsent = false) {
@@ -411,10 +430,14 @@ export class AsyncBridge {
             m.status = 'pending';
             m.gmailId = undefined;
             m.identityStatus = undefined;
+            m.lastError = undefined;
+            m.identityError = undefined;
+            m.identityDiagnostic = undefined;
+            m.sendDiagnostic = undefined;
             this.store.saveMail(m);
             return { result, operatorReset: true, sent: false };
         }
-        return { result };
+        return { result, mail: mailStatus(this.store.mail(id)!) };
     }
     async stop() {
         this.stopping = true;
@@ -554,6 +577,10 @@ export async function doctorAsync(config: Config) {
         finally { store.close(); }
     });
     await check('Codex Gmail plugin protocol and identity', async () => { const result=await checkMailPlugin(config);if(!result.ok)throw Error(result.code); });
-    const {existsSync}=await import('node:fs');let heldReplies:unknown[]=[];if(existsSync(join(config.dataDir,'async-cli.sqlite'))){const state=new AsyncStore(join(config.dataDir,'async-cli.sqlite'),true);try{heldReplies=[...state.all('final-held'),...state.all<any>('mail-held').filter(h=>h.status==='held')];}finally{state.close();}}
-    return { engine: 'async-cli', outputMode:config.asyncMailOutput, heldReplies, checks, ok: checks.every(c => c.ok || c.optional) };
+    const {existsSync}=await import('node:fs');let heldReplies:unknown[]=[],deliveryBlocked:ReturnType<typeof blockedMail>=[];if(existsSync(join(config.dataDir,'async-cli.sqlite'))){const state=new AsyncStore(join(config.dataDir,'async-cli.sqlite'),true);try{heldReplies=[...state.all('final-held'),...state.all<any>('mail-held').filter(h=>h.status==='held')];deliveryBlocked=blockedMail(state.mails());}finally{state.close();}}
+    // Existing uncertain effects must survive installation of a reviewed recovery
+    // build; report delivery health separately from runtime upgrade readiness.
+    const deliveryHealthy = deliveryBlocked.length === 0;
+    checks.push({name:'Outbound mail delivery',ok:deliveryHealthy,optional:true,...(!deliveryHealthy?{detail:'MAIL_DELIVERY_REQUIRES_OPERATOR_INSPECTION'}:{})});
+    return { engine: 'async-cli', outputMode:config.asyncMailOutput, heldReplies, deliveryHealthy, deliveryBlocked, checks, ok: checks.every(c => c.ok || c.optional) };
 }

@@ -8,7 +8,7 @@ import type { Config } from './config.js';
 import { startMailServer } from './mail-connect.js';
 import { inspectGmailPlugin } from './gmail-plugin-readiness.js';
 import type { Rpc } from './app-server.js';
-import { GmailError, type MailTransport, type MessageRef, type RawMessage, type SendMail } from './mail-transport.js';
+import { GmailError, type MailTransport, type MessageRef, type RawMessage, type SendMail, type MailTransportFailure } from './mail-transport.js';
 import { quoteHash } from './mail-quote.js';
 import { verifyPresentation } from './mail-presentation.js';
 import { summaryHtml, summaryText } from './mail-summary.js';
@@ -18,8 +18,8 @@ const active = new Set<CodexGmailTransport>();
 export async function closeMailTransports() { await Promise.all([...active].map(mail => mail.close())); }
 const actions = ['get_profile', 'search_email_ids', 'read_email', 'send_email'] as const;
 type Action = typeof actions[number];
-function decode(result: any): any {
-    if (result?.isError) throw new GmailError(0, 'MAIL_PLUGIN_TOOL_FAILED_RECONNECT_WITH_MAIL_CONNECT');
+function decode(result: any, action: Action): any {
+    if (result?.isError) throw new GmailError(0, 'MAIL_PLUGIN_TOOL_FAILED', { action, reason: 'tool_error' }, { cause: result });
     if (result?.structuredContent && typeof result.structuredContent === 'object') return result.structuredContent;
     const texts = result?.content?.filter((c: any) => c.type === 'text');
     if (texts?.length !== 1) throw Error('MAIL_PLUGIN_RESPONSE_INVALID');
@@ -45,8 +45,19 @@ export class CodexGmailTransport implements MailTransport {
     // no arbitrary server/tool name or tool arguments are accepted from a model.
     private async call(action: Action, args: unknown) {
         if (!actions.includes(action) || !this.routes[action]) throw Error('MAIL_PLUGIN_ACTION_FORBIDDEN');
-        try { return decode(await this.rpc.request('mcpServer/tool/call', { threadId: this.threadId, ...this.routes[action], arguments: args })); }
-        catch (e) { if (e instanceof GmailError) throw e; throw new GmailError(0, 'MAIL_PLUGIN_CALL_UNCERTAIN_NO_AUTOMATIC_RETRY'); }
+        let result: unknown;
+        try { result = await this.rpc.request('mcpServer/tool/call', { threadId: this.threadId, ...this.routes[action], arguments: args }); }
+        catch (e) {
+            const message = e instanceof Error ? e.message : '';
+            const reason: MailTransportFailure['reason'] = message.startsWith('APP_SERVER_ACK_UNCERTAIN:') ? 'timeout' : message === 'APP_SERVER_DISCONNECTED' ? 'disconnected' : 'rpc_error';
+            const rpcCode = (e as { rpcCode?: unknown } | null)?.rpcCode;
+            throw new GmailError(0, 'MAIL_PLUGIN_CALL_UNCERTAIN_NO_AUTOMATIC_RETRY', { action, reason, ...(Number.isInteger(rpcCode) ? { rpcCode: rpcCode as number } : {}) }, { cause: e });
+        }
+        try { return decode(result, action); }
+        catch (e) {
+            if (e instanceof GmailError) throw e;
+            throw new GmailError(0, 'MAIL_PLUGIN_RESPONSE_INVALID', { action, reason: 'invalid_response' }, { cause: result });
+        }
     }
     async profile() {
         const profile = await this.call('get_profile', {}), address = profile.emailAddress || profile.email_address || profile.email;
@@ -95,7 +106,9 @@ export class CodexGmailTransport implements MailTransport {
         const inline = parts.filter(p => p.content_id), files = parts.filter(p => !p.content_id);
         if (inline.length) payload = { mime_type: 'multipart/related', parts: [payload, ...inline] };
         if (files.length) payload = { mime_type: 'multipart/mixed', parts: [payload, ...files] };
-        return ref(await this.call('send_email', { to: this.config.ownerAddress, subject: input.subject, payload, reply_message_id: input.replyMessageId, response_fields: ['id', 'thread_id', 'label_ids'] }));
+        const result = await this.call('send_email', { to: this.config.ownerAddress, subject: input.subject, payload, reply_message_id: input.replyMessageId, response_fields: ['id', 'thread_id', 'label_ids'] });
+        try { return ref(result); }
+        catch { throw new GmailError(0, 'MAIL_PLUGIN_MESSAGE_IDENTITY_MISSING', { action: 'send_email', reason: 'missing_identity' }, { cause: result }); }
     }
     private async attachmentParts(attachments:Attachment[]){
         const parts:any[]=[],hashes:string[]=[];let total=0;

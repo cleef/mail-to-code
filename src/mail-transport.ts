@@ -15,4 +15,11 @@ export interface MailTransport {
     prepareReply?(id: string, attachments?: Attachment[]): Promise<{ quoteHash: string; rfcId: string; threadId: string; attachmentHashes?: string[] }>;
     close?(): Promise<void>;
 }
-export class GmailError extends Error { constructor(public status: number, message: string) { super(message); } }
+export interface MailTransportFailure {
+    action: 'get_profile' | 'search_email_ids' | 'read_email' | 'send_email';
+    reason: 'tool_error' | 'rpc_error' | 'timeout' | 'disconnected' | 'invalid_response' | 'missing_identity';
+    rpcCode?: number;
+}
+export class GmailError extends Error {
+    constructor(public status: number, message: string, readonly failure?: MailTransportFailure, options?: ErrorOptions) { super(message, options); }
+}
