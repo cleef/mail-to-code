@@ -219,6 +219,7 @@ test('PR blocks absent, legacy, foreign, configuration-stale and plain diagnosti
         f.store.put('check', id, receipt);
         f.config.profiles.sample.checks[0].env.TEST_VALUE = 'new synthetic config';
         await assert.rejects(publish([id]), (e: any) => e.missing[0].reason === 'configuration_changed');
+        assert.equal((await f.tools().call('primary', 'project_checks', { project: 'sample', action: 'inspect' }) as any).missing[0].reason, 'configuration_changed');
         f.config.repositories.sample.checks.push({ executable: 'node', args: ['another.mjs'], cwd: '.' });
         passed = await f.tools().call('primary', 'project_checks', { project: 'sample', action: 'run' }) as any;
         await assert.rejects(publish([passed.checkIds[0]]), (e: any) => e.message === 'REQUIRED_CHECKS_NOT_PASSED' && e.missing[0].command.args[0] === 'another.mjs');

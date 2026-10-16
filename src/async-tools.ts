@@ -186,7 +186,8 @@ export class AsyncTools {
         return plan.required.flatMap(command => {
             const matches = receipts.filter(r => receiptMatches(r, command, plan));
             if (matches.some(r => !receiptProblem(r, s.repo, digest, plan.fingerprint))) return [];
-            return [{ command: { executable: command.executable, args: command.args, cwd: command.cwd }, reason: matches.length ? receiptProblem(matches.at(-1), s.repo, digest, plan.fingerprint)! : 'not_executed' }];
+            const previous = matches.at(-1) || receipts.find(r => r.fingerprint !== plan.fingerprint && r.executable === command.executable && JSON.stringify(r.args) === JSON.stringify(command.args) && r.cwd === command.cwd);
+            return [{ command: { executable: command.executable, args: command.args, cwd: command.cwd }, reason: previous ? receiptProblem(previous, s.repo, digest, plan.fingerprint)! : 'not_executed' }];
         });
     }
     private async target(kind: ApprovalRequest['kind'], name?: string) {
