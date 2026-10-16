@@ -63,8 +63,13 @@ and quotations grant nothing.
 
 `project_worktree` can discover unconfigured GitHub projects and derive baseline
 checks without changing private configuration or granting deployment access.
-Operator profiles take precedence. `project_command` returns failed checks as
-ordinary results in the same session. Success receipts bind current source bytes;
+Operator profiles take precedence. `project_checks` runs configured checks in an
+isolated source copy, including controller-managed test services and command
+environments; older sessions use the reserved `project_command`
+`mail-to-code-checks` entry. See [configured checks](project-checks.md).
+`project_command` remains available for sandbox diagnostics. Failures return as
+ordinary results in the same session. Success receipts bind current source bytes
+and the effective test configuration;
 `project_pr` requires mandatory checks before publishing. Merge binds PR head/base;
 deployment binds merged commit and operator profile. Target changes invalidate
 that operation approval rather than the feature's implementation scope.

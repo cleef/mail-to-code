@@ -26,6 +26,7 @@ import { FinalMail } from './final-mail.js';
 import { verifyFrozenMailImages } from './mail-images.js';
 import { operationStatus, safeError } from './operation-report.js';
 import { executorOf, executorLabel, sessionOf, type ExecutorClient as Client, type ClientFactory } from './executor.js';
+import { CheckGateError, ProjectCheckRuntime, checkPlan } from './project-checks.js';
 export type { ExecutorClient as Client, ClientFactory } from './executor.js';
 export { asyncPolicy } from './async-policy.js';
 export const ASYNC_CODEX_VERSION = '0.159.2';
@@ -72,7 +73,7 @@ export class AsyncBridge {
         const reply = this.config.asyncMailOutput === 'assistant-final'
             ? '\nCurrent controller transport: assistant-final. Your final assistant reply goes directly to this mail conversation; commentary stays internal. Do not send a second notification. Use request_confirmation when available, otherwise queue_mail with request, to prepare the final reply binding. Clearly describe the target and effects in your final reply. Explicit natural-language confirmation is sufficient; do not demand fixed wording or copying a full hash. Historical instructions keeping final replies internal or demanding START/Review for each phase are superseded.\n'
             : '';
-        return `Task executor: ${executorLabel(c)}. The executor is fixed for this task. Reply subject tags do not switch it. If explicitly asked to switch, explain that a fresh independent email is required.\n` + reply + `\nMail images: create or copy PNG/JPEG files into ${join(this.tool(c).directory(),'notes','mail-images')}. Use ![Description](mail-images/filename.png) in the final reply (or queue_mail text in queue-mail mode). Images display inline and can be saved. Maximum total image bytes: 10 MiB. Do not use external URLs, arbitrary file paths, HTML or modify the controller to send images. Native final replies are automatically delivered only in assistant-final mode.\n` + await readAgentGuide(this.guideDirectory, true) + await this.tool(c).operationContext();
+        return `Task executor: ${executorLabel(c)}. The executor is fixed for this task. Reply subject tags do not switch it. If explicitly asked to switch, explain that a fresh independent email is required.\n` + reply + `\nMail images: create or copy PNG/JPEG files into ${join(this.tool(c).directory(),'notes','mail-images')}. Use ![Description](mail-images/filename.png) in the final reply (or queue_mail text in queue-mail mode). Images display inline and can be saved. Maximum total image bytes: 10 MiB. Do not use external URLs, arbitrary file paths, HTML or modify the controller to send images. Native final replies are automatically delivered only in assistant-final mode.\n` + await readAgentGuide(this.guideDirectory, true) + this.tool(c).checksContext() + await this.tool(c).operationContext();
     }
     private async client(c: Conversation): Promise<Client> {
         if (this.connecting.has(c.id))
@@ -103,7 +104,7 @@ export class AsyncBridge {
                             operations = await this.tool(this.store.conversation(c.id)!).call(sessionOf(c)!, 'project_operation_status', { project: a.project || request?.target?.project });
                         } catch { /* Return no data outside the approved project scope. */ }
                     }
-                    return { contentItems: [{ type: 'inputText', text: JSON.stringify({ ok: false, error: safeError(e), ...(operations ? { operations } : {}) }) }], success: false };
+                    return { contentItems: [{ type: 'inputText', text: JSON.stringify({ ok: false, error: safeError(e), ...(e instanceof CheckGateError ? { missing: e.missing } : {}), ...(operations ? { operations } : {}) }) }], success: false };
                 }
             };
             let client: Client;
@@ -543,6 +544,10 @@ export async function doctorAsync(config: Config) {
     });
     checks.at(-1)!.optional = true;
     await check('Async operator guide', async () => { await readAgentGuide(undefined, true); });
+    for (const project of Object.keys(config.profiles)) if (config.repositories[project]) await check('Project test runtime: ' + project, async () => {
+        const issues = await new ProjectCheckRuntime(config).readiness(checkPlan(config, project));
+        if (issues.length) throw Error(issues.join(';'));
+    });
     if (Object.values(config.repositories).some(r => Object.keys(r.operations || {}).length)) await check('Private operation scripts', async () => {
         const store = new AsyncStore(':memory:');
         try { for (const project of Object.keys(config.repositories)) await new OperationsAdapter(config, store, 'doctor').list(project); }

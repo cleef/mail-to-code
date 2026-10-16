@@ -194,7 +194,9 @@ node dist/src/cli.js doctor
 
 With `engine: "async-cli"`, `doctor` runs the same checks as `async-doctor`: Node,
 projects root, pinned Codex version, optional Claude version, operator guide,
-configured private operation scripts and Gmail plugin protocol and identity.
+configured project test runtimes/images, private operation scripts and Gmail
+plugin protocol and identity. Database/browser checks use
+[configured project checks](docs/project-checks.md), including older sessions.
 The Claude check is optional for Codex-only installations; verify it passes when
 enabling Claude tasks. Version checks do not prove Claude authentication or
 successful model execution. Prepare GitHub credentials and project profiles

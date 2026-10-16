@@ -47,9 +47,9 @@ export function replyPolicy(cwd:string,config?:Pick<Config,'mailCodexHome'>):str
   const table=Object.entries(filesystem).map(([path,access])=>JSON.stringify(path)+'='+JSON.stringify(access)).join(',');
   return ['-c','approval_policy="never"','-c','default_permissions="mail-to-code-reply"','-c',`permissions.mail-to-code-reply.filesystem={${table}}`,'-c','permissions.mail-to-code-reply.network.enabled=false','-c','features.apps=false','-c','features.plugins=false','-c','features.hooks=false','-c','web_search="disabled"','-c','shell_environment_policy.inherit="core"'];
 }
-export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop',readPaths:string[]=[],analysis=false,trustedProjectLinks:string[]=[],additionalFilesystem:Record<string,string>={}):string[] {
+export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop',readPaths:string[]=[],analysis=false,trustedProjectLinks:string[]=[],additionalFilesystem:Record<string,string>={},temporaryDirectory?:string):string[] {
   const filesystem:Record<string,string>={':root':'deny',':minimal':'read',[resolve(worktree)]:phase==='plan'?'read':'write',
-    [join(worktree,'.git')]:'read',[join(worktree,'.codex')]:'read',[join(worktree,'.agents')]:'read',':tmpdir':'write',':slash_tmp':'write'};
+    [join(worktree,'.git')]:'read',[join(worktree,'.codex')]:'read',[join(worktree,'.agents')]:'read',...(temporaryDirectory?{[temporaryDirectory]:'write'}:{':tmpdir':'write',':slash_tmp':'write'})};
   // Node's macOS builds load the system OpenSSL configuration during startup.
   if(process.platform==='darwin')filesystem['/System/Library/OpenSSL']='read';
   for(const p of readPaths)if(resolve(p)!==resolve(worktree))filesystem[resolve(p)]='read';
@@ -76,6 +76,8 @@ export function codexPolicy(config:Config,worktree:string,phase:'plan'|'develop'
     for(const p of readPaths)filesystem[resolve(p)]='read';
   }
   Object.assign(filesystem,additionalFilesystem);
+  if(temporaryDirectory)for(const [path,permission] of Object.entries(filesystem))
+    if(permission==='read' && path.startsWith('/') && !existsSync(path))delete filesystem[path];
   for(const path of mailCredentialPaths(config))filesystem[path]='deny';
   // Normalize the complete policy, including async masks. A denied parent already
   // hides exact descendants, unless an intervening read/write rule reopens them.
@@ -215,7 +217,7 @@ export class Runner {
       child.stdin.end(input);
     });
   }
-  async check(worktree:string,command:string,args:string[],cwd:string,signal:AbortSignal,network=false,options:{env?:NodeJS.ProcessEnv;sources?:string[];policy?:string[]}={}) {
+  async check(worktree:string,command:string,args:string[],cwd:string,signal:AbortSignal,network=false,options:{env?:NodeJS.ProcessEnv;sources?:string[];policy?:string[];cacheDirectory?:string}={}) {
     const policy=[...(options.policy||codexPolicy(this.config,worktree,'develop'))];
     if(network){policy.push('-c','permissions.mail-to-code-task.network.enabled=true','-c','features.network_proxy=true','-c',`permissions.mail-to-code-task.network.domains={${(options.sources||['registry.npmjs.org']).map(d=>JSON.stringify(d)+'="allow"').join(',')}}`);}
     // Codex 0.159's Linux stdio bridge appears as UNKNOWN to Node's handle
@@ -223,6 +225,6 @@ export class Runner {
     // failed test exit codes. All command data stays in positional arguments.
     return execute(this.config.codexCommand,['sandbox',...policy,'-P','mail-to-code-task','--','/usr/bin/bash','-c',
       'set -o pipefail; "$@" 2> >(cat >&2) | cat','mail-to-code-check',command,...args],
-      {cwd,env:{...shellEnvironment(),...options.env,NPM_CONFIG_CACHE:'/tmp/mail-to-code-npm-cache'},signal,timeoutMs:this.config.timeoutSeconds*1000});
+      {cwd,env:{...shellEnvironment(),...options.env,NPM_CONFIG_CACHE:options.cacheDirectory||'/tmp/mail-to-code-npm-cache'},signal,timeoutMs:this.config.timeoutSeconds*1000});
   }
 }

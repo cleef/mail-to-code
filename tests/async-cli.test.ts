@@ -73,6 +73,7 @@ test('new body and complete quoted history reach the same session without a busi
     for (const name of ['input', 'notes', 'worktrees'])
         assert.ok((await stat(join(f.root, 'async-cli', 'features', c.id, name))).isDirectory());
     assert.ok(start.params.dynamicTools.some((t: any) => t.name === 'queue_mail'));
+    assert.ok(start.params.dynamicTools.some((t: any) => t.name === 'project_checks'));
     assert.ok(!('outputSchema' in client.calls.find(c => c.method === 'turn/start')!.params));
     const second = { ...incoming('two', '采用推荐方案；暂不合并和部署'), inReplyTo: i.rfcId };
     const routed = f.store.intake(second, 'raw', '采用推荐方案；暂不合并和部署');
@@ -116,11 +117,13 @@ test('resumed, steered and recovery turns receive current operations without rep
     assert.equal(client.calls.find(x => x.method === 'thread/resume')!.params.dynamicTools, undefined);
     const sent = client.calls.find(x => x.method === 'turn/start')!.params.input[0].text;
     assert.ok(sent.startsWith('MAIL_INPUT_ID=two\n')); assert.match(sent, /sample-staging/); assert.match(sent, /mail-to-code-operation/);
+    assert.match(sent, /mail-to-code-checks/);
     assert.equal(f.store.input('two')!.incoming.text, 'Recheck access'); assert.equal(f.store.input('two')!.fullText, 'Recheck access');
     client.history.thread.turns.at(-1).status = 'inProgress'; const current = f.store.conversation(c.id)!; current.activeTurn = client.history.thread.turns.at(-1).id; f.store.save(current);
     f.store.intake({ ...incoming('three', 'Additional context'), inReplyTo: incoming('one').rfcId }, 'raw third', 'Additional context');
     await resumed.dispatch(f.store.conversation(c.id)!);
     assert.match(client.calls.find(x => x.method === 'turn/steer')!.params.input[0].text, /Controller operation context/);
+    assert.match(client.calls.find(x => x.method === 'turn/steer')!.params.input[0].text, /mail-to-code-checks/);
     assert.equal(f.store.all('operation').length, 0); assert.equal(f.store.mails().length, 0);
     assert.equal(f.store.conversation(c.id)!.codexThread, 'codex-thread');
     client.history.thread.turns.at(-1).status = 'failed'; await resumed.stop();
@@ -128,6 +131,7 @@ test('resumed, steered and recovery turns receive current operations without rep
     await recovered.dispatch(f.store.conversation(c.id)!);
     const recovery = f.clients.at(-1)!.calls.find(x => x.method === 'turn/start')!.params.input[0].text;
     assert.match(recovery, /^Runtime reconnection/); assert.match(recovery, /Controller operation context/);
+    assert.match(recovery, /mail-to-code-checks/);
     assert.equal(f.store.inputs().length, 3); assert.equal(f.store.all('request').length, 0);
     await recovered.stop(); f.store.close();
 });
