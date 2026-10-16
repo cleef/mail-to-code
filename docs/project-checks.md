@@ -48,7 +48,8 @@ With `image` configured, checks run in a fresh Podman Pod using that image;
 capabilities, no privilege escalation and only the sanitized workspace mounted.
 The Pod has no external network, published ports or host networking. Services
 and tests communicate through their private loopback, such as `127.0.0.1:3306`.
-The controller passes each step's configured environment. Database services have
+An init process forwards signals and reaps children. Host proxy variables are
+not inherited; the controller passes each step's configured environment. Database services have
 no workspace mount. Images are digest-pinned and must already exist locally;
 test execution uses `--pull=never`. Service health is checked before commands.
 Pods, containers and their anonymous volumes are removed on exit, failure,

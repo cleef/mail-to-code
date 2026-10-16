@@ -56,6 +56,8 @@ test('effective checks validate and fingerprint environment, images, services, p
         f.config.repositories.sample.checks[0].cwd = '../outside'; assert.throws(() => checkPlan(f.config, 'sample'));
         f.config.repositories.sample.checks = [{ executable: 'podman', args: [], cwd: '.' }]; assert.throws(() => checkPlan(f.config, 'sample'), /Privileged/);
         f.config.repositories.sample.checks = []; f.config.profiles.sample.services.push(service); assert.throws(() => checkPlan(f.config, 'sample'), /DUPLICATE/);
+        assert.equal(ProfileSchema.safeParse({ image: '--volume=/host:/data@sha256:' + 'a'.repeat(64) }).success, false);
+        assert.equal(ProfileSchema.safeParse({ services: [{ ...service, image: '--privileged@sha256:' + 'a'.repeat(64) }] }).success, false);
     } finally { await f.close(); }
 });
 
@@ -157,6 +159,7 @@ test('container command mounts only the test copy, passes synthetic env and stop
         await assert.rejects(new ProjectCheckRuntime(f.config, processCall).run(f.tree, checkPlan(f.config, 'sample'), new AbortController().signal), /PROCESS_FAILED/);
         const [check] = calls.filter(c => c.includes('--read-only'));
         assert.ok(check.includes('TEST_VALUE=synthetic')); assert.ok(check.includes('--cap-drop=all')); assert.ok(check.includes('--pull=never'));
+        assert.ok(check.includes('--init')); assert.ok(check.includes('--http-proxy=false')); assert.equal(check[check.indexOf('--') + 1], image);
         assert.ok(!check.some(a => a.includes(f.tree))); assert.match(check[check.indexOf('-v') + 1], /artifacts\/checks\/run-.*\/workspace:\/workspace:rw,Z$/);
         assert.deepEqual(calls.at(-1)!.slice(0, 4), ['pod', 'rm', '--ignore', '-f']);
     } finally { await f.close(); }

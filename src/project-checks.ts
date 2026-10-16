@@ -165,7 +165,7 @@ export class ProjectCheckRuntime {
                     signal.throwIfAborted();
                     await this.checkCwd(workspace, command.cwd);
                     const output = await log(command, () => profile.image
-                        ? this.process('podman', ['run', '--pull=never', '--rm', '--name', `${pod}-check-${step}`, '--pod', pod!, '--read-only', '--cap-drop=all', '--security-opt=no-new-privileges', '--user', `${process.getuid!()}:${process.getgid!()}`, '--tmpfs', '/tmp:rw,size=512m', '-e', 'HOME=/tmp', '-e', 'TMPDIR=/tmp', '-v', `${workspace}:/workspace:rw,Z`, '-w', `/workspace/${command.cwd}`, ...Object.entries(command.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), profile.image!, command.executable, ...command.args], { signal, timeoutMs: this.config.timeoutSeconds * 1000 })
+                        ? this.process('podman', ['run', '--pull=never', '--rm', '--init', '--http-proxy=false', '--name', `${pod}-check-${step}`, '--pod', pod!, '--read-only', '--cap-drop=all', '--security-opt=no-new-privileges', '--user', `${process.getuid!()}:${process.getgid!()}`, '--tmpfs', '/tmp:rw,size=512m', '-e', 'HOME=/tmp', '-e', 'TMPDIR=/tmp', '-v', `${workspace}:/workspace:rw,Z`, '-w', `/workspace/${command.cwd}`, ...Object.entries(command.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), '--', profile.image!, command.executable, ...command.args], { signal, timeoutMs: this.config.timeoutSeconds * 1000 })
                         : native(command, false));
                     outputs.commands.push({ command: { executable: command.executable, args: command.args, cwd: command.cwd }, ...output });
                 }

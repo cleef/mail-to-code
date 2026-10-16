@@ -75,12 +75,12 @@ export class RuntimeAdapter {
             await this.process('podman', ['pod', 'create', '--name', pod, '--network=none', '--userns=keep-id', '--label=mail-to-code.owner=controller'], { signal, timeoutMs: 30000 });
             for (const service of profile.services) {
                 const name = `${pod}-${service.name}`;
-                await this.process('podman', ['run', '--pull=never', '--rm', '-d', '--pod', pod, '--name', name, '--security-opt=no-new-privileges', ...Object.entries(service.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), service.image, ...service.args], { signal, timeoutMs: 30000 });
+                await this.process('podman', ['run', '--pull=never', '--rm', '--init', '--http-proxy=false', '-d', '--pod', pod, '--name', name, '--security-opt=no-new-privileges', ...Object.entries(service.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), '--', service.image, ...service.args], { signal, timeoutMs: 30000 });
                 let healthy = false, lastHealthError: any;
                 for (let n = 0; n < 60; n++) {
                     signal.throwIfAborted();
                     try {
-                        await this.process('podman', ['exec', name, ...service.health], { signal, timeoutMs: 3000 });
+                        await this.process('podman', ['exec', '--', name, ...service.health], { signal, timeoutMs: 3000 });
                         healthy = true;
                         break;
                     } catch (error) {
@@ -143,7 +143,7 @@ export class RuntimeAdapter {
                 if (cwd !== tree && !cwd.startsWith(tree + '/'))
                     throw new Error('Step escapes worktree');
                 if (profile.image) {
-                    const args = ['run', '--pull=never', '--rm', '--read-only', '--cap-drop=all', '--security-opt=no-new-privileges', ...(pod ? ['--user', `${process.getuid!()}:${process.getgid!()}`] : ['--userns=keep-id']), '--tmpfs', '/tmp:rw,size=512m', ...(pod ? ['--pod', pod] : ['--network=none']), '-v', `${tree}:/workspace:rw,Z`, '-w', `/workspace/${c.cwd}`, ...Object.entries(c.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), profile.image, c.executable, ...c.args];
+                    const args = ['run', '--pull=never', '--rm', '--init', '--http-proxy=false', '--read-only', '--cap-drop=all', '--security-opt=no-new-privileges', ...(pod ? ['--user', `${process.getuid!()}:${process.getgid!()}`] : ['--userns=keep-id']), '--tmpfs', '/tmp:rw,size=512m', ...(pod ? ['--pod', pod] : ['--network=none']), '-v', `${tree}:/workspace:rw,Z`, '-w', `/workspace/${c.cwd}`, ...Object.entries(c.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), '--', profile.image, c.executable, ...c.args];
                     const output = await execute('podman', args, { signal, timeoutMs: this.config.timeoutSeconds * 1000 });
                     await log(c, output);
                 }
