@@ -159,6 +159,42 @@ operation, `--verified-absent` resets an absent send, or
 input. Each reset preserves an audit snapshot and executes nothing by itself.
 Search or history absence alone never performs a reset.
 
+### Outbound mail diagnostics
+
+`async-status` includes send attempts, timestamps, Gmail receipts, separate send
+and identity errors, and bounded transport reason codes (tool rejection, RPC
+failure, timeout, disconnect, malformed response or missing identity). `doctor`
+reports `deliveryHealthy: false`, `deliveryBlocked` and a failed outbound-delivery
+check when mail requires operator inspection, even if plugin login and profile
+checks succeed. That check is informational for runtime readiness (`ok` and the
+exit status), so preserved uncertain mail does not prevent installing a reviewed
+recovery build. It still grants no permission to resend.
+
+Inspect the first underlying failure for each attempt and phase explicitly:
+
+```sh
+node dist/src/cli.js async-status
+node dist/src/cli.js async-mail-errors <mail-id>
+```
+
+These commands are read-only and can run while the service is active. Detailed
+provider errors and RPC error data are bounded and retained in `mail-error`
+records in the private async SQLite database. They are operator evidence and may
+contain sensitive provider text; do not paste them into model input, mail or
+public issues. Development sessions cannot read this database. Default status
+output includes only controller codes and transport metadata, not these details.
+Older failed sends without diagnostics remain inspectable but their discarded
+original exception cannot be reconstructed by an upgrade.
+
+A known Gmail receipt remains `sent` with pending identity verification if its
+read fails. Unknown send outcomes remain `uncertain`. Reconciliation records
+search failure, no matching sent message, unverified candidates or ambiguity;
+none of these outcomes resends mail. A verified delivery clears active errors
+while preserving failure evidence. After fixing the transport, use the stopped
+service recovery procedure above. Only independent confirmation that the exact
+frozen message was not sent permits `--verified-absent`; it audits the prior
+attempt and returns that same frozen message to pending without sending it.
+
 ## Verification
 
 After adding controlled operations to an installation with existing conversations,

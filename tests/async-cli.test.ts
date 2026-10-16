@@ -16,6 +16,9 @@ import { git } from '../src/git.js';
 import { markdownHtml } from '../src/mail-markdown.js';
 import { Runner, codexPolicy } from '../src/runner.js';
 import { FinalMail } from '../src/final-mail.js';
+import { GmailError } from '../src/mail-transport.js';
+import { blockedMail, mailStatus } from '../src/mail-diagnostics.js';
+import { execute } from '../src/process.js';
 const incoming = (id: string, text = 'Implement the scoped feature'): Incoming => ({ id, threadId: 'gmail-1', rfcId: `<${id}@example.test>`, inReplyTo: '', subject: 'Synthetic feature', text, from: 'owner@example.test', trusted: true });
 class FakeClient extends EventEmitter implements Client {
     calls: {
@@ -215,6 +218,76 @@ test('unknown send outcome is reconciled and never automatically resent after re
     assert.equal(f.sends.length, 1);
     assert.equal(f.store.mails()[0].status, 'uncertain');
     f.store.close();
+});
+test('send failure survives restart with private evidence; absence never requeues frozen mail', async () => {
+    const f=await fixture(),c=f.store.intake(incoming('one'),'raw','body');
+    const {mail:m}=f.store.queue(c,'result','Frozen result');
+    m.replyMessageId='one';m.replyParentRfcId='<one@example.test>';m.replyQuoteHash='frozen-quote-hash';m.attachmentHashes=[];f.store.saveMail(m);
+    f.mail.send=async()=>{f.sends.push('attempt');throw new GmailError(0,'MAIL_PLUGIN_CALL_UNCERTAIN_NO_AUTOMATIC_RETRY',{action:'send_email',reason:'timeout'},{cause:new Error('Synthetic provider detail: synthetic-private-value')});};
+    await f.bridge.flush();
+    let saved=f.store.mail(m.id)!;
+    assert.equal(saved.status,'uncertain');assert.equal(saved.attempts,1);assert.equal(saved.sendDiagnostic?.transport?.reason,'timeout');
+    const audit=f.store.get<any>('mail-error',saved.sendDiagnostic!.auditId);
+    assert.match(JSON.stringify(audit),/synthetic-private-value/);assert.equal(JSON.stringify(mailStatus(saved)).includes('synthetic-private-value'),false);
+    f.store.close();const reopened=new AsyncStore(join(f.root,'async-cli.sqlite')),bridge=new AsyncBridge(f.config,reopened,f.mail);
+    try{
+        await bridge.flush();saved=reopened.mail(m.id)!;
+        assert.equal(saved.identityError,'DELIVERY_SENT_MESSAGE_NOT_FOUND');assert.equal(saved.status,'uncertain');assert.equal(f.sends.length,1);
+        assert.equal(blockedMail(reopened.mails()).length,1);
+        const before=JSON.stringify(reopened.all('mail-error'));
+        assert.equal((await bridge.reconcileSend(m.id)).result,'absent');assert.equal(reopened.mail(m.id)!.status,'uncertain');
+        assert.equal(JSON.stringify(reopened.all('mail-error')),before);
+        const reset=await bridge.reconcileSend(m.id,true);assert.equal(reset.operatorReset,true);assert.equal(f.sends.length,1);
+        const after=reopened.mail(m.id)!;assert.equal(after.status,'pending');assert.equal(after.text,m.text);assert.equal(after.deliveryMarker,m.deliveryMarker);assert.equal(after.attempts,1);assert.equal(after.lastError,undefined);
+        for(const key of ['bodySnapshot','replyMessageId','replyParentRfcId','replyQuoteHash','attachmentHashes'] as const)assert.deepEqual(after[key],m[key]);
+        assert.equal(reopened.all('send-audit').length,1);assert.equal(reopened.all('mail-error').length,1);
+    }finally{await bridge.stop();reopened.close();}
+});
+test('successful send receipt survives read failure and restart without resend',async()=>{
+    const f=await fixture(),c=f.store.intake(incoming('one'),'raw','body'),{mail:m}=f.store.queue(c,'result','Frozen');
+    f.mail.read=async()=>{throw new GmailError(0,'MAIL_PLUGIN_TOOL_FAILED',{action:'read_email',reason:'tool_error'},{cause:'Synthetic read failure'});};
+    await f.bridge.flush();let saved=f.store.mail(m.id)!;
+    assert.equal(saved.status,'sent');assert.equal(saved.gmailId,'sent');assert.ok(saved.sentAt);assert.equal(saved.identityError,'DELIVERY_READ_PENDING');assert.equal(saved.identityDiagnostic?.transport?.action,'read_email');
+    assert.equal(saved.lastError,undefined);assert.equal(f.sends.length,1);assert.equal(f.store.all('mail-error').length,1);
+    f.store.close();const reopened=new AsyncStore(join(f.root,'async-cli.sqlite')),bridge=new AsyncBridge(f.config,reopened,f.mail);
+    try{saved=reopened.mail(m.id)!;saved.identityCheckedAt='1970-01-01';reopened.saveMail(saved);await bridge.flush();assert.equal(f.sends.length,1);assert.equal(reopened.mail(m.id)!.status,'sent');assert.equal(reopened.all('mail-error').length,1);}finally{await bridge.stop();reopened.close();}
+});
+test('reconciliation distinguishes lookup failures, absence and ambiguity without replay',async()=>{
+    const f=await fixture(),c=f.store.intake(incoming('one'),'raw','body'),{mail:m}=f.store.queue(c,'result','Frozen');
+    m.status='uncertain';m.attempts=1;f.store.saveMail(m);
+    f.mail.search=async()=>{throw new GmailError(0,'MAIL_PLUGIN_CALL_UNCERTAIN_NO_AUTOMATIC_RETRY',{action:'search_email_ids',reason:'disconnected'},{cause:new Error('Synthetic lookup detail')});};
+    assert.equal((await f.bridge.reconcileSend(m.id,true)).result,'pending');let saved=f.store.mail(m.id)!;
+    assert.equal(saved.identityError,'DELIVERY_SEARCH_PENDING');assert.equal(saved.identityDiagnostic?.transport?.reason,'disconnected');assert.equal(saved.status,'uncertain');assert.equal(f.store.all('mail-error').length,1);
+    f.mail.search=async()=>Array.from({length:501},(_,n)=>({id:String(n)}));
+    assert.equal((await f.bridge.reconcileSend(m.id,true)).result,'ambiguous');assert.equal(f.store.mail(m.id)!.identityError,'DELIVERY_SEARCH_AMBIGUOUS');
+    f.mail.search=async()=>[{id:'unverified'}];
+    assert.equal((await f.bridge.reconcileSend(m.id,true)).result,'pending');assert.equal(f.store.mail(m.id)!.identityError,'DELIVERY_CANDIDATES_UNVERIFIED');
+    assert.equal(f.sends.length,0);assert.equal(f.store.all('send-audit').length,0);f.store.close();
+});
+test('reply preflight failure is visible without dispatching; interrupted historical sends remain blocked',async()=>{
+    const f=await fixture(),c=f.store.intake(incoming('one'),'raw','body'),{mail:m}=f.store.queue(c,'result','Frozen');
+    f.mail.prepareReply=async()=>{throw Error('Synthetic parent lookup failure');};await f.bridge.flush();
+    assert.equal(f.sends.length,0);let saved=f.store.mail(m.id)!;assert.equal(saved.attempts,0);assert.equal(saved.sendDiagnostic?.phase,'prepare');assert.equal(saved.lastError,'MAIL_PREPARE_FAILED');assert.equal(blockedMail(f.store.mails()).length,1);
+    saved.status='sending';saved.attempts=1;saved.lastError=undefined;saved.sendDiagnostic=undefined;f.store.saveMail(saved);await f.bridge.flush();
+    saved=f.store.mail(m.id)!;assert.equal(saved.status,'uncertain');assert.equal(saved.lastError,'MAIL_SEND_INTERRUPTED_OUTCOME_UNKNOWN');assert.equal(saved.identityError,'DELIVERY_SENT_MESSAGE_NOT_FOUND');assert.equal(f.sends.length,0);f.store.close();
+});
+test('a late verified delivery clears active errors and retains the original failed attempt audit',async()=>{
+    const f=await fixture(),c=f.store.intake(incoming('one'),'raw','body'),{mail:m}=f.store.queue(c,'result','Frozen');
+    f.mail.send=async()=>{f.sends.push('attempt');throw Error('Synthetic acknowledgement loss');};await f.bridge.flush();
+    f.mail.search=async()=>[{id:'delivered'}];
+    f.mail.read=async()=>({id:'delivered',threadId:c.gmailThread,labelIds:['SENT'],raw:Buffer.from(`From: ${f.config.gmailAddress}\r\nTo: ${f.config.ownerAddress}\r\nSubject: ${c.subject}\r\nMessage-ID: <delivered@example.test>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${m.bodySnapshot?.text??m.text}\n\n[MAIL-REF: ${m.deliveryMarker}]`).toString('base64url')});
+    assert.equal((await f.bridge.reconcileSend(m.id,true)).result,'verified');const saved=f.store.mail(m.id)!;
+    assert.equal(saved.status,'sent');assert.equal(saved.identityStatus,'verified');assert.equal(saved.lastError,undefined);assert.equal(saved.sendDiagnostic,undefined);assert.equal(saved.rfcMessageId,'<delivered@example.test>');assert.equal(blockedMail(f.store.mails()).length,0);assert.equal(f.sends.length,1);assert.equal(f.store.all('send-audit').length,0);assert.equal(f.store.all('mail-error').length,1);f.store.close();
+});
+test('operator status and explicit private error inspection are read-only CLI paths',async()=>{
+    const f=await fixture(),c=f.store.intake(incoming('one'),'raw','body'),{mail:m}=f.store.queue(c,'result','Frozen');
+    f.mail.send=async()=>{throw new Error('Synthetic provider evidence: synthetic-private-value');};await f.bridge.flush();
+    const directory=join(f.root,'config');await mkdir(directory,{mode:0o700});await writeFile(join(directory,'config.json'),JSON.stringify({...f.config,engine:'async-cli',controllerRepository:'synthetic/controller'}),{mode:0o600});
+    const before=JSON.stringify(f.store.mails()),env={...process.env,MAIL_TO_CODE_CONFIG_DIR:directory},cli=join(process.cwd(),'dist/src/cli.js');
+    const status=JSON.parse((await execute(process.execPath,[cli,'async-status'],{env})).stdout);
+    assert.equal(status.outbox[0].lastError,'MAIL_SEND_FAILED');assert.equal(status.outbox[0].attempts,1);assert.equal(JSON.stringify(status).includes('synthetic-private-value'),false);
+    const errors=JSON.parse((await execute(process.execPath,[cli,'async-mail-errors',m.id],{env})).stdout);
+    assert.equal(errors.length,1);assert.match(JSON.stringify(errors),/synthetic-private-value/);assert.equal(JSON.stringify(f.store.mails()),before);f.store.close();
 });
 test('only root agent may send a mail or record grants', async () => {
     const f = await fixture(), c = f.store.intake(incoming('one'), 'raw', 'body');
@@ -506,13 +579,14 @@ test('Markdown mail renders recommendations and tables without executable HTML o
 });
 test('actual stdio protocol initializes, handles dynamic server requests and closes cleanly', async () => {
     const root = await mkdtemp(join(tmpdir(), 'async-rpc-')), script = join(root, 'server.mjs');
-    await writeFile(script, `import readline from 'node:readline';const lines=readline.createInterface({input:process.stdin});const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');lines.on('line',l=>{const m=JSON.parse(l);if(m.method==='initialize')send({id:m.id,result:{}});else if(m.method==='probe'){send({id:'tool-call',method:'item/tool/call',params:{tool:'queue_mail'}});globalThis.pending=m.id;}else if(m.id==='tool-call')send({id:globalThis.pending,result:m.result});});`);
+    await writeFile(script, `import readline from 'node:readline';const lines=readline.createInterface({input:process.stdin});const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');lines.on('line',l=>{const m=JSON.parse(l);if(m.method==='initialize')send({id:m.id,result:{}});else if(m.method==='rpc-failure')send({id:m.id,error:{code:-32000,message:'Synthetic RPC rejection',data:{reason:'synthetic provider evidence'}}});else if(m.method==='probe'){send({id:'tool-call',method:'item/tool/call',params:{tool:'queue_mail'}});globalThis.pending=m.id;}else if(m.id==='tool-call')send({id:globalThis.pending,result:m.result});});`);
     // The fake command wrapper accepts the same CLI argument layout as Codex.
     const wrapper = join(root, 'fake-codex');
     await writeFile(wrapper, `#!/bin/sh\nexec '${process.execPath}' '${script}'\n`, { mode: 0o700 });
     const actual = new AppServer(wrapper, [], root, async () => ({ success: true, contentItems: [{ type: 'inputText', text: 'queued' }] }));
     await actual.start();
     assert.equal((await actual.request('probe', {})).success, true);
+    await assert.rejects(actual.request('rpc-failure',{}),(e:any)=>{assert.equal(e.rpcCode,-32000);assert.deepEqual(e.cause,{reason:'synthetic provider evidence'});return true;});
     await actual.close();
     await actual.close();
 });

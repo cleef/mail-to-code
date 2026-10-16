@@ -48,6 +48,8 @@ export interface Outbound {
   bodySnapshot?: MailBodySnapshot;
   status: 'pending' | 'sending' | 'sent' | 'uncertain' | 'failed'; gmailId?: string; threadId?: string;
   createdAt: string; lastError?: string; attempts: number;
+  sendDiagnostic?: import('./mail-diagnostics.js').MailDiagnostic;
+  identityDiagnostic?: import('./mail-diagnostics.js').MailDiagnostic;
   rfcMessageId?:string; identityCheckedAt?:string; identityError?:string; sentAt?:string; attemptedAt?:string; identityStatus?:'pending'|'verified'|'failed'; deliveryMarker?:string; approvalBinding?:ApprovalBinding;
   replySourceId?:string; replyMessageId?:string; replyParentRfcId?:string; replyQuoteHash?:string; attachmentHashes?:string[];
   summary?:MailSummary; questions?:MailQuestion[]; presentation?:MailPresentation;
