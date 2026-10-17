@@ -7,7 +7,9 @@ private email, credentials, deployment addresses or runtime state in this repo.
 The bridge owns Gmail, privileged Git, PRs, merge and deployment. Async email goes
 directly to its bound persistent Codex or Claude Code session; the bridge does not advance business stages.
 Source edits stay in approved worktrees. Preserve immutable mail and exact operation
-bindings. Never retry uncertain effects. Stage rules remain in the legacy engine.
+bindings. Never retry uncertain effects. In the async engine the START/Review/deploy
+boundaries are enforced per effect by a target-bound confirmation, not by a stage
+state machine; the legacy stage state machine remains only in the legacy engine.
 
 Configuration and runtime memory belong outside the checkout. Preserve edited
 private guides across installs and upgrades. Async scope persists through technical

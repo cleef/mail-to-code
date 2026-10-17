@@ -120,3 +120,24 @@ test('H5 missing fixture is a precise baseline/source failure and never becomes 
   await x.plan();assert.equal(x.current().state,'WAITING_INPUT');assert.equal(x.current().planNotice,undefined);assert.match(x.store.mails().at(-1)!.text,/默认分支缺少 H5 fixture 文件.*配置来源 auto/);
  }finally{await x.cleanup();}
 });
+test('Monorepo without a root manifest derives per-app install/build/checks with correct cwd',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'propose-monorepo-'));
+ try{
+  await mkdir(join(root,'app-a'));await mkdir(join(root,'app-b'));await mkdir(join(root,'docs'));
+  await writeFile(join(root,'app-a','package.json'),JSON.stringify({name:'app-a',scripts:{build:'tsc',test:'node --test'}}));
+  await writeFile(join(root,'app-a','package-lock.json'),'{}');
+  await writeFile(join(root,'app-b','package.json'),JSON.stringify({name:'app-b',scripts:{typecheck:'tsc --noEmit','build:all':'node build.mjs'}}));
+  await writeFile(join(root,'app-b','package-lock.json'),'{}');
+  // A docs subdir with a package.json but no lockfile must not be treated as an app.
+  await writeFile(join(root,'docs','package.json'),JSON.stringify({name:'docs',scripts:{test:'vitest'}}));
+  const profile=await proposeProfile('mono',root);
+  assert.equal(profile.kind,'generic');
+  assert.deepEqual(profile.install.map(c=>c.cwd),['app-a','app-b']);
+  assert.ok(profile.install.every(c=>c.args.includes('ci')));
+  assert.ok(profile.build.some(c=>c.cwd==='app-a'&&c.args.includes('build')));
+  assert.ok(profile.build.some(c=>c.cwd==='app-b'&&c.args.includes('typecheck')));
+  assert.ok(profile.build.some(c=>c.cwd==='app-b'&&c.args.includes('build:all')));
+  assert.ok(profile.checks.some(c=>c.cwd==='app-a'&&c.args.includes('test')));
+  assert.equal(profile.checks.some(c=>c.cwd==='app-b'),false);
+ }finally{await rm(root,{recursive:true,force:true});}
+});

@@ -30,17 +30,39 @@ export interface Project {
 }
 export interface PreparedProject extends Project { baselineSha: string; snapshotPath: string; }
 const cmd = (script: string, cwd = '.') => ({ executable: 'npm', args: ['run', script], cwd });
+const BUILD_SCRIPTS = ['typecheck', 'build:weapp', 'build:h5', 'build', 'build:all'] as const;
+const TARO_PENDING = ['微信朋友、群、朋友圈发送与打开需 iOS/Android 真机验收'];
+const SKIP_APP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'vendor', '.run', '.release', '.cache']);
+function appProfile(pkg: any, cwd = '.'): ProjectProfile {
+    const scripts = pkg.scripts || {}, steps = Object.keys(scripts);
+    const kind = pkg.name === 'mail-to-code' ? 'controller' : scripts['build:weapp'] ? 'taro' : 'generic';
+    return ProfileSchema.parse({ kind, install: [{ executable: 'npm', args: ['ci', '--no-audit', '--no-fund'], cwd }], build: BUILD_SCRIPTS.filter(k => steps.includes(k)).map(s => cmd(s, cwd)), checks: scripts.test ? [{ executable: 'npm', args: ['test'], cwd }] : [],
+        preview: kind === 'taro' ? { kind: 'h5', mounts: [{ source: 'dist-h5', destination: '.' }], paths: ['/#/pages/home/index'], fixtures: 'preview/fixtures.json' } : { kind: 'none' }, pendingChecks: kind === 'taro' ? TARO_PENDING : [] });
+}
 export async function proposeProfile(alias: string, path: string): Promise<ProjectProfile> {
     let pkg: any;
     try {
         pkg = JSON.parse(await sourceFile(path, 'package.json'));
     }
     catch(e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
-    if (pkg) {
-        const scripts = pkg.scripts || {}, steps = Object.keys(scripts);
-        const kind = pkg.name === 'mail-to-code' ? 'controller' : scripts['build:weapp'] ? 'taro' : 'generic';
-        return ProfileSchema.parse({ kind, install: [{ executable: 'npm', args: ['ci', '--no-audit', '--no-fund'] }], build: [...(['typecheck', 'build:weapp', 'build:h5', 'build'].filter(k => steps.includes(k))).map(s => cmd(s))], checks: scripts.test ? [{ executable: 'npm', args: ['test'] }] : [],
-            preview: kind === 'taro' ? { kind: 'h5', mounts: [{ source: 'dist-h5', destination: '.' }], paths: ['/#/pages/home/index'], fixtures: 'preview/fixtures.json' } : { kind: 'none' }, pendingChecks: kind === 'taro' ? ['微信朋友、群、朋友圈发送与打开需 iOS/Android 真机验收'] : [] });
+    if (pkg) return appProfile(pkg);
+    // Monorepo without a root manifest: derive install/build/check steps per
+    // tracked app subdirectory so operator config only pins the test commands
+    // that need human judgement, not every install/build entry.
+    const apps: { pkg: any; cwd: string }[] = [];
+    try {
+        for (const entry of await readdir(path, { withFileTypes: true })) {
+            if (!entry.isDirectory() || entry.name.startsWith('.') || SKIP_APP_DIRS.has(entry.name)) continue;
+            const cwd = entry.name, sub = join(path, cwd);
+            if (!await hasSourceFile(sub, 'package.json') || !await hasSourceFile(sub, 'package-lock.json')) continue;
+            apps.push({ pkg: JSON.parse(await sourceFile(sub, 'package.json')), cwd });
+        }
+    }
+    catch(e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
+    if (apps.length) {
+        apps.sort((a, b) => a.cwd.localeCompare(b.cwd));
+        const profiles = apps.map(({ pkg, cwd }) => appProfile(pkg, cwd));
+        return ProfileSchema.parse({ kind: 'generic', runtime: ['node'], install: profiles.flatMap(p => p.install), build: profiles.flatMap(p => p.build), checks: profiles.flatMap(p => p.checks), packageSources: ['registry.npmjs.org'], pendingChecks: profiles.some(p => p.pendingChecks.length) ? TARO_PENDING : [] });
     }
     if(await hasSourceFile(path,'backlog/TODO.md'))return ProfileSchema.parse({kind:'docs'});
     try {
