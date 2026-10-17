@@ -122,6 +122,17 @@ test('mutating copied source is rejected and install hooks cannot introduce outs
     } finally { await f.close(); }
 });
 
+test('installed dependency files with protected names are allowed while their symlinks stay audited', async () => {
+    const f = await fixture();
+    try {
+        f.config.profiles.sample = ProfileSchema.parse({ runtime: [], install: [{ executable: 'node', args: ['-e', 'const fs=require("node:fs");fs.mkdirSync("node_modules/nanoid/.claude",{recursive:true});fs.writeFileSync("node_modules/nanoid/.claude/settings.local.json","{}")'] }], checks: [command] });
+        const result = await new ProjectCheckRuntime(f.config, execute, nativeRunner(f.config)).run(f.tree, checkPlan(f.config, 'sample'), new AbortController().signal);
+        assert.equal(result.commands.length, 1);
+        f.config.profiles.sample = ProfileSchema.parse({ runtime: [], install: [{ executable: 'node', args: ['-e', 'const fs=require("node:fs");fs.mkdirSync("node_modules",{recursive:true});fs.symlinkSync("/etc/passwd","node_modules/escape")'] }], checks: [command] });
+        await assert.rejects(new ProjectCheckRuntime(f.config, execute, nativeRunner(f.config)).run(f.tree, checkPlan(f.config, 'sample'), new AbortController().signal), /UNSAFE_LINK/);
+    } finally { await f.close(); }
+});
+
 test('services have an isolated network, health gating and unconditional cleanup on failure, timeout and cancellation', async () => {
     const f = await fixture();
     try {

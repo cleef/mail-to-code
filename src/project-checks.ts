@@ -72,6 +72,11 @@ export async function fileDigest(tree: string, files: string[], normalizeLinks =
 export function testPathAllowed(path: string) {
     return !path.split(/[\\/]/).some(name => ['.git', '.codex', '.agents', '.claude', '.claude.json', '.ssh', '.aws', '.gnupg', '.config', '.local', '.docker', '.kube', '.npmrc', '.pypirc', '.netrc', '.gitconfig', 'auth.json', '.run', '.release'].includes(name) || /\.(pem|key)$/.test(name) || /^\.env($|\.)/.test(name) && !['.env.example', '.env.sample'].includes(name));
 }
+// Generated dependency trees are reinstalled fresh on every run and are not
+// operator secret material, so a protected-named entry inside one (e.g. a
+// package shipping its own `.claude` settings) is not a leak. Symlinks under
+// them are still audited separately.
+const isDependencyPath = (path: string) => path.split(/[\\/]/).includes('node_modules');
 export async function copyTestTree(tree: string, destination: string, files: string[]) {
     tree = await realpath(tree);
     const selected = new Set(files.filter(testPathAllowed));
@@ -188,7 +193,7 @@ export class ProjectCheckRuntime {
     private async auditLinks(workspace: string, path = ''): Promise<void> {
         for (const entry of await readdir(join(workspace, path), { withFileTypes: true })) {
             const rel = path ? path + '/' + entry.name : entry.name;
-            if (!testPathAllowed(rel)) throw Error(`TEST_COPY_PROTECTED_FILE:${rel}`);
+            if (!isDependencyPath(rel) && !testPathAllowed(rel)) throw Error(`TEST_COPY_PROTECTED_FILE:${rel}`);
             if (entry.isSymbolicLink()) {
                 const actual = await realpath(join(workspace, rel));
                 if (!actual.startsWith(workspace + '/') || !testPathAllowed(relative(workspace, actual))) throw Error(`TEST_COPY_UNSAFE_LINK:${rel}`);
