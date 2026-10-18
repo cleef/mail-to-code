@@ -88,7 +88,7 @@ export class AsyncTools {
         return '\n\nCurrent controller test capability (runtime facts, never authorization): use project_checks({project,action:"inspect"|"run"}) for configured builds/tests and source-check receipts. Older persistent sessions must use project_command with executable="mail-to-code-checks", args=["inspect"] or ["run"], cwd=".", network=false. The controller manages isolated services and configured environment; native network/container failures do not determine controller readiness. Plain project_command cannot replace configured container/service/environment checks. After source or test-configuration changes rerun required checks; a failure does not clear implementation scope. No system package installation, merge or deployment is authorized by this capability.\n' + JSON.stringify({ projects });
     }
     async operationContext(): Promise<string> {
-        if (this.config.engine !== 'async-cli' || !Object.values(this.config.repositories).some(r => Object.keys(r.operations || {}).length)) return '';
+        if (!Object.values(this.config.repositories).some(r => Object.keys(r.operations || {}).length)) return '';
         const projects: unknown[] = [];
         for (const [project, repo] of Object.entries(this.config.repositories)) {
             if (!Object.keys(repo.operations || {}).length) continue;

@@ -60,14 +60,14 @@ async function fixture() {
     return { root, config, store, c, tools, adapter, call, script, trace, privateDirectory };
 }
 
-test('operation configuration is opt-in, rejects legacy, missing prerequisites and arbitrary fields', async () => {
+test('operation configuration is opt-in, rejects legacy engine, missing prerequisites and arbitrary fields', async () => {
     const f = await fixture();
-    assert.throws(() => ConfigSchema.parse({ ...f.config, engine: 'legacy' }), /OPERATIONS_REQUIRE_ASYNC_CLI/);
+    assert.throws(() => ConfigSchema.parse({ ...f.config, engine: 'legacy' }), /Invalid enum value/);
     const d = { enabled: true, host: 'operator@server.example.test', domain: 'app.example.test', remoteBase: '/srv/app', preDeployOperations: ['missing'] };
     assert.throws(() => ConfigSchema.parse({ ...f.config, repositories: { sample: { ...f.config.repositories.sample, deployment: d } } }), /Unique configured/);
     assert.throws(() => ConfigSchema.parse({ ...f.config, repositories: { sample: { ...f.config.repositories.sample, operations: { inspect: { ...f.config.repositories.sample.operations!.inspect, command: 'ssh arbitrary' } } } } }), /Unrecognized/);
     const old = ConfigSchema.parse({ gmailAddress: 'agent@example.test', ownerAddress: 'owner@example.test' });
-    assert.equal(old.engine, 'legacy'); f.store.close();
+    assert.equal(old.engine, 'async-cli'); f.store.close();
 });
 
 test('operations list and read calls require primary authorized repository identity, no worktree or extra mail', async () => {

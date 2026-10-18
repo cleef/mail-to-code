@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { ConfigSchema, expand } from '../src/config.js';
 import { checkMailPlugin, connectMail, mailCodexEnvironment, mailCodexHome } from '../src/mail-connect.js';
 import { execute } from '../src/process.js';
-import { codexPolicy, replyPolicy } from '../src/runner.js';
+import { codexPolicy } from '../src/runner.js';
 
 test('independent mail home never inherits API credentials or replaces development authentication', async () => {
     const previous = process.env.OPENAI_API_KEY;
@@ -41,13 +41,12 @@ test('mail-connect invokes Codex in a private independent home without touching 
     assert.equal(await stat(config.dataDir).catch(() => null), null);
 });
 
-test('development and reply policies disable apps; configured mail credentials are masked', async () => {
+test('development policy disables apps; configured mail credentials are masked', async () => {
     const root = await mkdtemp(join(tmpdir(), 'synthetic-mail-policy-')), home = join(root, 'private-mail');
     await mkdir(home, { mode: 0o700 });
     const config = ConfigSchema.parse({ gmailAddress: 'agent@example.test', ownerAddress: 'owner@example.test', mailCodexHome: home });
     const policy = codexPolicy(config, root, 'develop');
     assert.ok(policy.includes('features.apps=false'));
-    const reply=replyPolicy(root,config);assert.ok(reply.includes('features.apps=false'));assert.ok(reply.find(s=>s.startsWith('permissions.mail-to-code-reply.filesystem='))!.includes(JSON.stringify(home)+'="deny"'));
     const table = policy.find(s => s.startsWith('permissions.mail-to-code-task.filesystem='))!;
     assert.ok(table.includes(JSON.stringify(home) + '="deny"'));
 });

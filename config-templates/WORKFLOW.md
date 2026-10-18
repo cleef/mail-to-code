@@ -40,7 +40,3 @@ unsaved/ignored files, active work, dependencies and protection. Privileged Git,
 PR and production effects belong to the bridge/operator. Unknown outcomes require
 reconciliation; never replay blindly. Controller changes are reviewed and upgraded
 manually. Edited private guides remain unchanged.
-
-Legacy engine instructions retain the old START/Review boundaries until an
-independently approved cutover. The asynchronous runtime contract supersedes old
-phase text only when that engine is explicitly selected.

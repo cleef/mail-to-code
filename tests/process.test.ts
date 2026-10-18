@@ -16,26 +16,7 @@ test('SQLite history cursor and IDs survive reopening; newer schema cannot be si
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
-import { Runner,disabledMcpPolicy } from '../src/runner.js';
-import { ConfigSchema } from '../src/config.js';
-import type { Session } from '../src/types.js';
-test('Root analysis repairs malformed profiles once in the same analysis thread and rejects repeated invalid output',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'mail-analysis-'));
-  try{
-    const config=ConfigSchema.parse({gmailAddress:'a@gmail.com',ownerAddress:'o@qq.com',projectsRoot:dir,productDocs:dir,dataDir:join(dir,'state')});
-    const runner=new Runner(config),session={id:'ANALYSIS',title:'自然描述',summary:'需求',repo:''} as Session;
-    let calls=0;const threads:(string|undefined)[]=[];
-    (runner as any).invoke=async(cwd:string,thread:string|undefined,policy:string[],schema:unknown,prompt:string,runDir:string,signal:AbortSignal,onThread:(id:string)=>void)=>{
-      threads.push(thread);onThread('root-thread');calls++;
-      return {workflow:{decision:'propose_step',kind:'implementation',name:'实施',rationale:'测试已确认需求',deliverables:['实现'],acceptance:['检查']},outcome:'plan_ready',summary:'方案',questions:[],projects:[{path:'app',displayName:'应用',role:'modify',profileProposal:calls===1?JSON.stringify({executable:'npm',args:['test']}):null,pendingChecks:[]}],productId:null,mergeOrder:['app']};
-    };
-    const result=await runner.analyze(session,'需求',new AbortController().signal,()=>{});
-    assert.equal(result.projects[0].profileProposal,undefined);assert.deepEqual(threads,[undefined,'root-thread']);
-    calls=0;(runner as any).invoke=async()=>{calls++;return {outcome:'invalid'};};
-    await assert.rejects(runner.analyze(session,'需求',new AbortController().signal,()=>{}));assert.equal(calls,2);
-  }finally{await rm(dir,{recursive:true,force:true});}
-});
-
+import { disabledMcpPolicy } from '../src/runner.js';
 test('Disabling an inventory-only MCP server supplies a valid inert transport without retaining its configuration',()=>{
  assert.deepEqual(disabledMcpPolicy([{name:'code-review'},{name:'http-server',transport:{type:'streamable_http'}}]),['-c','mcp_servers.code-review={command="/usr/bin/true",enabled=false}','-c','mcp_servers.http-server={url="https://invalid.invalid/",enabled=false}']);
  assert.throws(()=>disabledMcpPolicy([{name:'bad.name'}]),/MCP_NAME/);

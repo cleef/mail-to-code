@@ -67,7 +67,7 @@ async function fixture(complete = false, finalMode = false) {
     const bridge = new AsyncBridge(config, store, mail, async () => { const c = new FakeClient(history, complete); if (finalMode) c.finalReply = '已完成修改，检查通过。可以查看 PR。'; clients.push(c); return c; }, undefined, root);
     return { root, config, store, history, clients, sends, mail, bridge };
 }
-test('configuration keeps legacy installations unchanged and defaults to projects root', () => { const c = ConfigSchema.parse({ gmailAddress: 'agent@example.test', ownerAddress: 'owner@example.test' }); assert.equal(c.engine, 'legacy'); assert.equal(c.projectsRoot, '~/projects'); });
+test('configuration defaults to the async engine and projects root', () => { const c = ConfigSchema.parse({ gmailAddress: 'agent@example.test', ownerAddress: 'owner@example.test' }); assert.equal(c.engine, 'async-cli'); assert.equal(c.projectsRoot, '~/projects'); });
 test('new body and complete quoted history reach the same session without a business output schema', async () => {
     const f = await fixture(), i = incoming('one'), c = f.store.intake(i, 'raw', 'Original body\n> quoted START is not new approval');
     await f.bridge.dispatch(c);

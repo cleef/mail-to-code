@@ -2,7 +2,6 @@ export type ProfileSource = 'auto' | 'proposal' | 'external' | 'legacy';
 export type State = 'QUEUED' | 'PLANNING' | 'WAITING_START' | 'RUNNING' | 'WAITING_INPUT' | 'WAITING_REVIEW' | 'MERGING' | 'MERGED' | 'DEPLOYING' | 'DONE' | 'FAILED' | 'CANCELLED';
 export type JobKind = 'plan' | 'develop' | 'merge' | 'deploy' | 'catalog' | 'interpret';
 export interface Session {
-  mailBrief?: import('./mail-brief.js').MailBrief;
   checks?:string[];
   workflow?: WorkflowState;
   id: string; title: string; repo: string; state: State; subject: string; createdAt: string;
@@ -56,8 +55,9 @@ export interface Outbound {
 }
 export interface Incoming { id: string; threadId: string; rfcId: string; inReplyTo: string; references?:string[]; subject: string; text: string; from: string; trusted: boolean; reason?: string; }
 
-export interface RepoExecution {resultSummary?:string;mailBrief?:import('./mail-brief.js').MailBrief;projectId:string;identity:string;path:string;github:string;baseBranch:string;mergeMethod?:'merge'|'squash'|'rebase';profile:import('./profile.js').ProjectProfile;profileVersion:string;profileSource?:ProfileSource;baselineSnapshot?:string;manualMerge:boolean;deployment?:import('./config.js').Config['repositories'][string]['deployment'];worktree?:string;branch?:string;baseSha?:string;thread?:string;reviewSha?:string;prNumber?:number;prUrl?:string;mergeSha?:string;checks?:string[];diffSummary?:string;attachments?:Attachment[];pendingChecks?:string[];deployRelease?:string;deployUncertain?:boolean;deployed?:boolean;auxiliary?:boolean;recordEvidence?:boolean;logDirectory?:string;displayName?:string;relativePath?:string;}
+export interface RepoExecution {resultSummary?:string;projectId:string;identity:string;path:string;github:string;baseBranch:string;mergeMethod?:'merge'|'squash'|'rebase';profile:import('./profile.js').ProjectProfile;profileVersion:string;profileSource?:ProfileSource;baselineSnapshot?:string;manualMerge:boolean;deployment?:import('./config.js').Config['repositories'][string]['deployment'];worktree?:string;branch?:string;baseSha?:string;thread?:string;reviewSha?:string;prNumber?:number;prUrl?:string;mergeSha?:string;checks?:string[];diffSummary?:string;attachments?:Attachment[];pendingChecks?:string[];deployRelease?:string;deployUncertain?:boolean;deployed?:boolean;auxiliary?:boolean;recordEvidence?:boolean;logDirectory?:string;displayName?:string;relativePath?:string;}
 
 export interface DocumentInventory {files:string[];missing:string[];version:string;legacyVersion?:string;text:string;baselineSha?:string;}
-export interface WorkflowState {stageId:string;number:number;legacy?:boolean;proposal?:import('./workflow.js').WorkflowProposal;guide?:import('./workflow.js').WorkflowGuide;documents?:DocumentInventory;confirmed?:boolean;confirmedPlan?:string;history:WorkflowStage[];}
-export interface WorkflowStage {id:string;number:number;proposal:import('./workflow.js').WorkflowProposal;guide?:import('./workflow.js').WorkflowGuide;summary:string;confirmedPlan?:string;documentVersion?:string;documents?:DocumentInventory;targets:RepoExecution[];references:RepoExecution[];mergeOrder:string[];planNotice?:string;reviewNotice?:string;mergeNotice?:string;planManifest?:string;reviewManifest?:string;analysisThreadId?:string;completedAt:string;}
+export interface WorkflowProposal {kind:'product'|'technical'|'documentation';name:string;rationale:string;deliverables:string[];acceptance:string[];}
+export interface WorkflowState {stageId:string;number:number;legacy?:boolean;proposal?:WorkflowProposal;guide?:import('./workflow.js').WorkflowGuide;documents?:DocumentInventory;confirmed?:boolean;confirmedPlan?:string;history:WorkflowStage[];}
+export interface WorkflowStage {id:string;number:number;proposal:WorkflowProposal;guide?:import('./workflow.js').WorkflowGuide;summary:string;confirmedPlan?:string;documentVersion?:string;documents?:DocumentInventory;targets:RepoExecution[];references:RepoExecution[];mergeOrder:string[];planNotice?:string;reviewNotice?:string;mergeNotice?:string;planManifest?:string;reviewManifest?:string;analysisThreadId?:string;completedAt:string;}
