@@ -35,5 +35,4 @@ protection. Preserve primary checkouts and post-merge changes. No automatic
 cleanup or production access is introduced.
 
 Edited private guides remain unchanged during upgrades. The trusted active
-runtime contract sets the permission boundaries; legacy installations retain
-their explicit legacy START/Review rules until an approved cutover.
+runtime contract sets the permission boundaries.

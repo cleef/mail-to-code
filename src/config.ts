@@ -14,7 +14,7 @@ const repository = z.object({
   deployment: z.object({ trustedScriptSha: z.string().regex(/^[a-f0-9]{40}$/).optional(), host: z.string().regex(/^[\w.@-]+$/), domain: z.string().regex(/^[\w.-]+$/), remoteBase: z.string().regex(/^\/[\w./-]+$/), script:z.string().regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[\w./-]+$/).default('scripts/deploy.sh'), adapter:z.literal('script').default('script'), args:z.array(z.string()).default([]), healthPaths:z.array(z.string().regex(/^\/(?!\/)/)).default(['/']), enabled: z.boolean().default(false), preDeployOperations: z.array(OperationIdSchema).max(20).optional() }).strict().optional()
 }).strict();
 export const ConfigSchema = z.object({
-  engine:z.enum(['legacy','async-cli']).default('legacy'),
+  engine:z.enum(['async-cli']).default('async-cli'),
   asyncMailOutput:z.enum(['queue-mail','assistant-final']).default('queue-mail'),
   gmailAddress: z.string().email(), ownerAddress: z.string().email(),
   dataDir: z.string().default('~/.local/share/mail-to-code'), codexCommand: z.string().default('codex'),
@@ -27,10 +27,8 @@ export const ConfigSchema = z.object({
   screenshotImage: z.string().default('localhost/mail-to-code-preview:1.63.0'),
   previewEnabled: z.boolean().default(true)
 }).strict().superRefine((config, ctx) => {
-  if (config.engine !== 'async-cli' && config.asyncMailOutput === 'assistant-final') ctx.addIssue({ code: 'custom', path: ['asyncMailOutput'], message: 'ASSISTANT_FINAL_REQUIRES_ASYNC_CLI' });
   for (const [name, repo] of Object.entries(config.repositories)) {
     const prerequisites = repo.deployment?.preDeployOperations || [];
-    if (config.engine !== 'async-cli' && (Object.keys(repo.operations || {}).length || prerequisites.length)) ctx.addIssue({ code: 'custom', path: ['repositories', name], message: 'OPERATIONS_REQUIRE_ASYNC_CLI' });
     if (new Set(prerequisites).size !== prerequisites.length || prerequisites.some(id => !repo.operations?.[id])) ctx.addIssue({ code: 'custom', path: ['repositories', name, 'deployment', 'preDeployOperations'], message: 'Unique configured operations are required' });
   }
 });

@@ -57,7 +57,6 @@ export async function withProjectOperationLock<T>(config: Config, project: strin
 export class OperationsAdapter {
     constructor(readonly config: Config, readonly store: AsyncStore, readonly conversationId: string) {}
     private definition(project: string, operation: string) {
-        if (this.config.engine !== 'async-cli') throw Error('OPERATIONS_REQUIRE_ASYNC_CLI');
         OperationIdSchema.parse(operation);
         const value = this.config.repositories[project]?.operations?.[operation];
         if (!value) throw Error('OPERATOR_OPERATION_NOT_CONFIGURED');
