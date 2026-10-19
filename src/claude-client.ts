@@ -14,7 +14,7 @@ import { sessionOf } from './executor.js';
 import type { AsyncStore, Conversation } from './async-store.js';
 import { ASYNC_TOOLS } from './async-tools.js';
 import { execute } from './process.js';
-import { asyncPolicy, prepareNativeFilesystem } from './async-policy.js';
+import { asyncPolicy, prepareNativeFilesystem, claudeSessionStorage } from './async-policy.js';
 import { developmentEnvironment, shellEnvironment } from './runner.js';
 
 export const ASYNC_CLAUDE_VERSION = '2.1.296';
@@ -88,8 +88,9 @@ export function claudeOptions(config: Config, executable: string, environment = 
 // There is no unsandboxed fallback or controller operation bridge.
 export function spawnSandboxedClaude(config: Config, conversation: Conversation, executable: string, options: SpawnOptions) {
     prepareNativeFilesystem(config, conversation, executable);
-    const child = spawn(config.codexCommand, ['sandbox', ...asyncPolicy(config, conversation, executable), '-P', 'mail-to-code-task', '-C', config.projectsRoot, '--', options.command, ...options.args], {
-        cwd: options.cwd || config.projectsRoot, env: options.env, signal: options.signal, stdio: 'pipe', detached: true,
+    const cwd = options.cwd || config.projectsRoot;
+    const child = spawn(config.codexCommand, ['sandbox', ...asyncPolicy(config, conversation, executable), '-P', 'mail-to-code-task', '-C', cwd, '--', options.command, ...options.args], {
+        cwd, env: options.env, signal: options.signal, stdio: 'pipe', detached: true,
     });
     const nativeKill = child.kill.bind(child);
     child.kill = (signal: NodeJS.Signals | number = 'SIGTERM') => {
@@ -107,6 +108,7 @@ export class ClaudeClient extends EventEmitter implements ExecutorClient {
     private active?: ClaudeRun;
     private running?: Promise<void>;
     private stopped = false;
+    private cwd = '';
     constructor(readonly config: Config, readonly store: AsyncStore, readonly conversation: Conversation,
         readonly handler: (r: ServerRequest) => Promise<unknown>, readonly sdk: ClaudeRuntime = runtime,
         readonly check: (command: string) => Promise<string> = checkClaude) { super(); }
@@ -116,7 +118,7 @@ export class ClaudeClient extends EventEmitter implements ExecutorClient {
     private async history() {
         const journals = this.journals();
         if (!journals.length) return [];
-        const messages = await this.sdk.messages(this.session, this.config.projectsRoot);
+        const messages = await this.sdk.messages(this.session, this.cwd);
         return journals.map(journal => {
             const hit = messages.find(m => m.type === 'user' && !m.parent_tool_use_id && m.session_id === this.session && m.uuid === journal.promptId && contentText(m.message?.content) === journal.prompt);
             if (hit && !journal.accepted) { journal.accepted = true; this.save(journal); }
@@ -128,6 +130,7 @@ export class ClaudeClient extends EventEmitter implements ExecutorClient {
     async request(method: string, params: any): Promise<any> {
         if (method === 'thread/start' || method === 'thread/resume') {
             this.session = params.threadId || sessionOf(this.conversation) || randomUUID();
+            this.cwd = claudeSessionStorage(this.config, { ...this.conversation, executorSession: this.session }).cwd;
             this.instructions = params.developerInstructions;
             return { thread: { id: this.session } };
         }
@@ -177,6 +180,7 @@ export class ClaudeClient extends EventEmitter implements ExecutorClient {
             },
         })) });
         const run = this.sdk.query({ prompt, options: { ...claudeOptions(this.config, this.executable, { ...this.environment, ...developmentEnvironment(join(this.config.dataDir, 'async-cli', 'features', this.conversation.id, 'tmp'), this.environment) }),
+            cwd: this.cwd,
             ...(resume ? { resume: session } : { sessionId: session }),
             systemPrompt: { type: 'preset', preset: 'claude_code', append: this.instructions },
             mcpServers: this.config.asyncMailOutput === 'queue-mail' ? { mail_to_code: server } : {},
@@ -203,7 +207,7 @@ export class ClaudeClient extends EventEmitter implements ExecutorClient {
                 if (event.type !== 'result') continue;
                 if (event.origin?.kind === 'task-notification' || event.user_message_uuid && event.user_message_uuid !== journal.promptId || event.user_message_uuids && !event.user_message_uuids.includes(journal.promptId)) throw Error('CLAUDE_RESULT_INPUT_MISMATCH');
                 if (!journal.accepted) {
-                    const messages = await this.sdk.messages(session, this.config.projectsRoot);
+                    const messages = await this.sdk.messages(session, this.cwd);
                     if (!messages.some(m => m.type === 'user' && m.uuid === journal.promptId && m.session_id === session && !m.parent_tool_use_id && contentText(m.message?.content) === journal.prompt)) throw Error('CLAUDE_INPUT_ACK_UNCERTAIN');
                     accept();
                 }

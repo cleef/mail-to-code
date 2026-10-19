@@ -38,6 +38,8 @@ jobs:
         run: |
           node scripts/verify-async-sandbox.mjs | tee "$RUNNER_TEMP/native-sandbox-report.json"
           test -s "$RUNNER_TEMP/native-sandbox-report.json"
+      - name: Verify pinned Claude SDK starts a fresh session without model input
+        run: node scripts/verify-claude-startup.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: native-sandbox-report-${{ github.event_name }}

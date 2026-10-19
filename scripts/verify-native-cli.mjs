@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, realpath, cp, rename } from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { ConfigSchema } from '../dist/src/config.js';
 import { AsyncStore } from '../dist/src/async-store.js';
 import { AsyncBridge } from '../dist/src/async-cli.js';
 import { sessionOf } from '../dist/src/executor.js';
 import { execute } from '../dist/src/process.js';
+import { claudeSessionStorage, claudeProjectKey } from '../dist/src/async-policy.js';
 
 // No real mailbox, PR, merge or deployment. Fail if runtime/auth is unavailable.
 export async function verifyNativeCli(executor) {
@@ -61,7 +62,26 @@ export async function verifyNativeCli(executor) {
         await bridge.stop(); bridge = new AsyncBridge(config, store, transport, undefined, undefined, guides);
         await bridge.dispatch(store.conversation(c.id)); assert.equal(store.mails().length, 3);
         assert.equal(store.all('scope').length, 0); assert.equal(store.all('request').length, 0); assert.equal(store.all('operation').length, 0);
-        Object.assign(report, { passed: true, nativeWorktreeCreated: true, sameSession: true, separateSyntheticConfirmations: true, queuedReplies: 3, businessAuthorizationRecords: 0 });
+        if (executor === 'claude') {
+            await bridge.stop();
+            const storage = claudeSessionStorage(config, store.conversation(c.id));
+            const legacy = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects', claudeProjectKey(projectsRoot));
+            await mkdir(legacy, {recursive:true});
+            // Only this freshly generated synthetic history is copied to the
+            // pre-upgrade layout. Preserve the source and all cwd contents.
+            for (const name of [session + '.jsonl', session]) await cp(join(storage.project, name), join(legacy, name), {recursive:true, force:false, errorOnExist:true});
+            await rename(storage.project, storage.project + '-saved-fixture');
+            assert.equal(claudeSessionStorage(config, store.conversation(c.id)).legacy, true);
+            bridge = new AsyncBridge(config, store, transport, undefined, undefined, guides);
+            const fourth = {...input, id:'fourth', rfcId:'<fourth@example.test>', inReplyTo:input.rfcId,
+                text:`This is a synthetic legacy-session continuity check. Write the token from my first email to ${join(worktree, 'legacy-resume.txt')}. Give one final reply. No external effects.`};
+            store.intake(fourth, 'synthetic MIME', fourth.text);
+            await bridge.dispatch(store.conversation(c.id)); await finish(4);
+            assert.equal(sessionOf(store.conversation(c.id)), session);
+            assert.equal((await readFile(join(worktree, 'legacy-resume.txt'), 'utf8')).trim(), token);
+            report.legacyLayoutResumed = true;
+        }
+        Object.assign(report, { passed: true, nativeWorktreeCreated: true, sameSession: true, separateSyntheticConfirmations: true, queuedReplies: store.mails().length, businessAuthorizationRecords: 0 });
     } catch (error) { Object.assign(report, { passed: false, error: error.message }); process.exitCode = 1; }
     finally { await bridge.stop(); store.close(); }
     await writeFile(join(root, 'report.json'), JSON.stringify(report, null, 2));

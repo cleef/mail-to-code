@@ -21,10 +21,13 @@ or a stale confirmation; the old TOCTOU guarantee is deliberately removed.
    and deployment configuration remain context only. No scripts run automatically.
 5. Review private ASYNC_AGENTS.md; installation never overwrites edits. Each input
    appends the current native contract, superseding historical controller instructions.
-6. Run doctor and all three synthetic real-runtime acceptance scripts on the service
+6. Run doctor and all four synthetic real-runtime acceptance scripts listed in the README on the service
    host with the pinned binaries. Verify the policy protects actual mail/state/install
    paths and opens intended project/auth paths. A failed sandbox is a stop condition;
    never fall back to unsandboxed Claude. Check service PATH and auth independently.
+   With the pinned Linux user namespace, root-owned SSH configuration includes can
+   fail SSH ownership checks. Select an operator-owned SSH config explicitly with
+   `ssh -F /path/to/user-config` (or `GIT_SSH_COMMAND`); do not relax host permissions.
 7. Start one mailbox consumer manually. Verify a synthetic email round trip and an
    existing session reply. Historical inputs/approvals are not replayed or restored.
    No unfinished execution starts until the next new user email.
@@ -41,3 +44,9 @@ upgrade, real merge or deployment is performed as part of its tests.
 For future adapter development, use a separate clone and isolated worktree. A
 worktree sharing Git metadata with the protected live installation cannot assume
 that its Git metadata is writable.
+
+New Claude sessions start in a task-specific cwd so their native project directory
+can be mounted without pre-creating a transcript. Project discovery still uses the
+configured project locations supplied in the prompt. Existing native transcripts
+retain their original cwd, session ID and exact file grants; initialization does
+not move, truncate or replace history. See [startup fix acceptance](validation-claude-startup.md).
