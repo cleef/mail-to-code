@@ -6,7 +6,7 @@ deployment was used. The running adapter was not upgraded or restarted.
 
 ## Regression suite
 
-`npm test` passed **92/92**, with no skipped tests, on Node **22.23.2**, macOS.
+`npm test` passed **93/93**, with no skipped tests, on Node **22.23.2**, macOS.
 The suite builds from a clean dist directory and covers transport identity and
 deduplication, original executor/session continuity, retired operation tools,
 current contracts on new/resumed inputs, immutable final replies/images, lost
@@ -15,12 +15,37 @@ hold unfinished work without generating a recovery execution turn. Edited privat
 guides survive initialization. Static policy tests include canonical directory links
 and future SQLite sidecar masks. Preview tests use localhost only.
 
-## Matching-version acceptance: unavailable
+## Matching-version Linux OS sandbox: passed
+
+Ubuntu 24.04 CI installs Codex **0.159.2** and Claude Code **2.1.296** in an
+ephemeral tool directory with SDK **0.3.296**. The formal sandbox script passed
+**50 direct Codex checks** and **51 Claude process-boundary checks**; unsafe Claude
+account-directory overlap is rejected. Both
+[push](https://github.com/cleef/mail-to-code/actions/runs/39195135012) and
+[pull request](https://github.com/cleef/mail-to-code/actions/runs/39195128335)
+runs passed. The downloaded JSON artifact was nonempty, parsed successfully and
+contained only true check results. Real mail sent: **0**; business effects: **0**.
+
+The CI job replaces the retired project-check/container test. Shell pipefail and
+a nonempty report assertion prevent a failed sandbox probe from being hidden by
+tee. Acceptance covers private mount isolation for newly created foreign state,
+native Git/gh/local networking, exact writable native session files and npm CLI
+binary re-execution. Attempts to modify existing outside host files fail; creation
+at an invisible path may succeed only in Linux's disposable private filesystem.
+Separate host-side assertions verify no outside file is created and all protected
+host bytes remain unchanged.
+
+The Claude boundary launches synthetic Node code through the SDK's exact sandbox
+spawn path; it does not run a Claude model turn or establish native tool protocol
+acceptance. CI supplies no model credentials and does not change the service host.
+
+## Matching-version model acceptance: unavailable
 
 The formal scripts remain strict about Codex **0.159.2**, Claude Code **2.1.296**
-and Agent SDK **0.3.296**. The installed CLIs are Codex **0.163.0** and Claude Code
+and Agent SDK **0.3.296**. The local installed CLIs are Codex **0.163.0** and Claude Code
 **2.1.302**; the SDK dependency remains **0.3.296**. No software versions were upgraded.
-Retrieving the matching CLI binaries did not complete because downloads timed out.
+Local matching CLI downloads timed out; CI obtained them independently as recorded
+above. The service installation and local CLIs were not changed.
 
 | Command | Observed result |
 | --- | --- |
@@ -30,8 +55,8 @@ Retrieving the matching CLI binaries did not complete because downloads timed ou
 
 Real model/native protocol, original-session resumption and synthetic email
 merge/deployment confirmation acceptance **have not passed** with matching versions.
-Linux OS sandbox acceptance is also outstanding. These results must be obtained on
-the service host before a manual switch. Mock SDK tests do not replace them.
+These results and isolation acceptance on the actual service host must be obtained
+before a manual switch. Mock SDK tests and CI process probes do not replace them.
 
 ## Supplemental macOS isolation diagnosis
 
@@ -40,6 +65,9 @@ same policy/process-launch implementation against synthetic files and localhost.
 Its result is `diagnosticPassed: true, pinnedAcceptance: false`. This is supplemental
 evidence, not matching-version CLI/model acceptance. The Claude boundary runs a Node
 probe through the SDK's whole-process launcher; it does not run a Claude model turn.
+
+The expanded diagnostic passed **50 direct Codex checks** and **51 Claude process
+boundary checks**, including private files created after the sandbox process starts.
 
 Both direct Codex OS sandbox and the Claude process launch path verified:
 

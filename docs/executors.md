@@ -31,6 +31,10 @@ On Linux, CLAUDE_CONFIG_DIR (default ~/.claude) must remain outside broad writab
 project and readable tool directories. The pinned helper cannot reopen individual
 session/auth files beneath a denied parent; root-deny and exact file grants protect
 this separate account store instead. Overlap fails closed before launching Claude.
+Exact writable session files and SSH sockets suppress the pinned helper's directory
+metadata masks beneath those non-directory objects; their parent directories remain
+unavailable. The selected npm CLI and platform binary packages are readable so the
+Linux sandbox can re-execute its native binary without exposing unrelated packages.
 
 Development inherits a whitelist of host Git/gh/SSH config and credentials, model
 transport and proxy values. NODE_OPTIONS and arbitrary environment secrets are not
