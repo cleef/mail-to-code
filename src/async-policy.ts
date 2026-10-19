@@ -1,5 +1,5 @@
 import { join, dirname, resolve, delimiter } from 'node:path';
-import { existsSync, realpathSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, realpathSync, mkdirSync, writeFileSync, readFileSync, accessSync, constants } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expand, configDir, type Config } from './config.js';
 import type { Conversation } from './async-store.js';
@@ -11,6 +11,32 @@ export const installationRoot = fileURLToPath(new URL('../../', import.meta.url)
 const canonical = (path: string) => { try { return realpathSync(path); } catch { return resolve(path); } };
 
 const within = (path: string, root: string) => path === root || path.startsWith(root.endsWith('/') ? root : root + '/');
+
+// Linux re-executes the Codex native binary inside bwrap. npm's PATH shim and
+// platform binary are separate packages, including in a private temporary install.
+function commandRoots(command: string): string[] {
+    const candidates = command.includes('/') ? [resolve(command)] : (process.env.PATH || '').split(delimiter).map(path => join(path, command));
+    for (const candidate of candidates) {
+        try {
+            accessSync(candidate, constants.X_OK);
+            const executable = canonical(candidate), roots = new Set([dirname(executable)]);
+            let directory = dirname(executable);
+            for (let depth = 0; depth < 5; depth++, directory = dirname(directory)) {
+                try {
+                    const name = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')).name;
+                    if (/^@(?:openai\/codex|anthropic-ai\/claude-code)(?:-[a-z0-9-]+)?$/.test(name)) {
+                        roots.add(directory);
+                        const platformPackage = join(dirname(directory), name.split('/')[1] + `-${process.platform}-${process.arch}`);
+                        if (existsSync(platformPackage)) roots.add(canonical(platformPackage));
+                        break;
+                    }
+                } catch { /* native binaries need no npm manifest */ }
+            }
+            return [...roots];
+        } catch { /* try the next PATH entry; missing launchers still fail closed */ }
+    }
+    return [];
+}
 
 export function nativeFilesystem(config: Config, c: Conversation, executable?: string): Record<string, string> {
     const directory = canonical(join(config.dataDir, 'async-cli', 'features', c.id));
@@ -43,6 +69,7 @@ export function nativeFilesystem(config: Config, c: Conversation, executable?: s
         if (path && existsSync(path)) { entries[resolve(path)] = 'read'; entries[canonical(path)] = 'read'; }
     }
     for (const path of (developmentEnvironment().PATH || '').split(delimiter)) if (path && existsSync(path) && !entries[canonical(path)]) entries[canonical(path)] = 'read';
+    for (const path of [...commandRoots(config.codexCommand), ...(executable ? commandRoots(executable) : [])]) if (!entries[path]) entries[path] = 'read';
     if (process.env.SSH_AUTH_SOCK && existsSync(process.env.SSH_AUTH_SOCK)) entries[canonical(process.env.SSH_AUTH_SOCK)] = 'write';
     for (const path of ['/usr/local', '/opt/homebrew', '/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer']) if (existsSync(path)) entries[canonical(path)] = 'read';
     if (process.platform === 'darwin') entries['/System/Library/OpenSSL'] = 'read';

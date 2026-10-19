@@ -43,6 +43,15 @@ test('a linked data directory still protects future database sidecars at the can
     assert.equal(rules[actual],'deny');assert.equal(rules[join(actual,'async-cli/features/primary')],'write');
     assert.equal(rules[join(actual,'artifacts','**')],undefined);
 });
+test('a selected npm Codex shim exposes its pinned native platform package for Linux re-exec',async()=>{
+    const {root,config}=await fixture(),scope=join(root,'tools/node_modules/@openai'),pkg=join(scope,'codex');
+    await mkdir(join(pkg,'bin'),{recursive:true});await writeFile(join(pkg,'package.json'),JSON.stringify({name:'@openai/codex'}));
+    const shim=join(pkg,'bin/codex.js');await writeFile(shim,'#!/usr/bin/env node\n',{mode:0o700});
+    const platformPackage=join(scope,`codex-${process.platform}-${process.arch}`);await mkdir(platformPackage);
+    config.codexCommand=shim;
+    const rules=nativeFilesystem(config,c);assert.equal(rules[pkg],'read');assert.equal(rules[platformPackage],'read');
+    assert.equal(rules[scope],undefined); // Other account packages are not exposed.
+});
 test('development auth is selected from host only; mail environment gets no development secrets',()=>{
     const source={HOME:'/synthetic/home',PATH:'/synthetic/bin',GITHUB_TOKEN:'synthetic',GH_CONFIG_DIR:'/synthetic/gh',GIT_SSH_COMMAND:'ssh -F /synthetic/ssh-config',SSH_AUTH_SOCK:'/synthetic/socket',ANTHROPIC_API_KEY:'model-only',MAIL_TO_CODE_CONFIG_DIR:'/synthetic/mail',NODE_OPTIONS:'unsafe'};
     const dev=developmentEnvironment('/synthetic/tmp',source),mail=shellEnvironment(source);
