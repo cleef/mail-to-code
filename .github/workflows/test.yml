@@ -34,7 +34,10 @@ jobs:
           echo "$RUNNER_TEMP/native-cli/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Verify native filesystem, Git, gh and local network boundaries
         # Synthetic child-process probes, no model login, mail or real external effects.
-        run: node scripts/verify-async-sandbox.mjs | tee "$RUNNER_TEMP/native-sandbox-report.json"
+        shell: bash
+        run: |
+          node scripts/verify-async-sandbox.mjs | tee "$RUNNER_TEMP/native-sandbox-report.json"
+          test -s "$RUNNER_TEMP/native-sandbox-report.json"
       - uses: actions/upload-artifact@v4
         with:
           name: native-sandbox-report-${{ github.event_name }}

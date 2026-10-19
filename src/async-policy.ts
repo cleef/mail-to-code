@@ -10,61 +10,7 @@ import { sessionOf } from './executor.js';
 export const installationRoot = fileURLToPath(new URL('../../', import.meta.url));
 const canonical = (path: string) => { try { return realpathSync(path); } catch { return resolve(path); } };
 
-// Deny unknown child names recursively without a blanket deny glob over this
-// task's own paths: Codex applies deny globs even beneath explicit write grants.
-// The trie also protects tasks/files created after a persistent session starts.
-function protectDirectory(entries: Record<string,string>, root: string, allowed: string[]) {
-    type PathNode = { terminal?: boolean; children: Map<string, PathNode> };
-    const tree: PathNode = { children: new Map() };
-    for (const path of allowed) {
-        let node = tree;
-        for (const part of path.split('/')) {
-            if (!node.children.has(part)) node.children.set(part, { children: new Map() });
-            node = node.children.get(part)!;
-        }
-        node.terminal = true;
-    }
-    const level = (directory: string, node: PathNode) => {
-        if (node.terminal) return; // The complete allowed subtree belongs to this task.
-        type Letters = { accepted?: PathNode; children: Map<string, Letters> };
-        const names: Letters = { children: new Map() };
-        for (const [name, child] of node.children) {
-            let cursor = names;
-            for (const ch of name) {
-                if (!cursor.children.has(ch)) cursor.children.set(ch, { children: new Map() });
-                cursor = cursor.children.get(ch)!;
-            }
-            cursor.accepted = child;
-        }
-        const patterns: string[] = [];
-        const walk = (prefix: string, letters: Letters) => {
-            // Dot prefixes would normalize to a parent and mask allowed children.
-            if (prefix && prefix !== '.' && prefix !== '..' && !letters.accepted) patterns.push(prefix);
-            // A hyphen must be last in a glob character class, never a range.
-            const chars = [...letters.children.keys()].sort((a,b) => a === '-' ? 1 : b === '-' ? -1 : a.localeCompare(b)).join('');
-            patterns.push(prefix + (chars ? '[!' + chars + ']*' : '?*'));
-            for (const [ch, child] of letters.children) walk(prefix + ch, child);
-            if (letters.accepted) level(join(directory, prefix), letters.accepted);
-        };
-        walk('', names);
-        // Bounded alternations avoid both argv limits and Seatbelt's string
-        // parser limit when native project names are long.
-        let group: string[] = [];
-        const flush = () => {
-            if (!group.length) return;
-            const pattern = join(directory, '{' + group.join(',') + '}');
-            entries[pattern] = 'deny';
-            entries[pattern + '/**'] = 'deny';
-            group = [];
-        };
-        for (const pattern of patterns) {
-            if (group.join(',').length + pattern.length > 512) flush();
-            group.push(pattern);
-        }
-        flush();
-    };
-    level(root, tree);
-}
+const within = (path: string, root: string) => path === root || path.startsWith(root.endsWith('/') ? root : root + '/');
 
 export function nativeFilesystem(config: Config, c: Conversation, executable?: string): Record<string, string> {
     const directory = canonical(join(config.dataDir, 'async-cli', 'features', c.id));
@@ -84,9 +30,10 @@ export function nativeFilesystem(config: Config, c: Conversation, executable?: s
             } catch { /* normal .git directory */ }
         }
     }
-    // Keep structural parents read-only too: otherwise a writable projectsRoot
-    // could rename runtime storage and bypass path-based child masks.
-    for (const path of [config.dataDir, join(config.dataDir, 'async-cli'), join(config.dataDir, 'async-cli', 'features'), directory]) entries[canonical(path)] = 'read';
+    // A denied runtime parent becomes a private mount on Linux. Reopen only
+    // this task directory; future sibling tasks/DB files never enter its view.
+    entries[canonical(config.dataDir)] = 'deny';
+    entries[directory] = 'write';
     for (const name of ['worktrees', 'notes', 'tmp']) entries[join(directory, name)] = 'write';
     entries[join(directory, 'input')] = 'read';
     if (config.productDocs) entries[canonical(config.productDocs)] = 'write';
@@ -100,14 +47,19 @@ export function nativeFilesystem(config: Config, c: Conversation, executable?: s
     for (const path of ['/usr/local', '/opt/homebrew', '/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer']) if (existsSync(path)) entries[canonical(path)] = 'read';
     if (process.platform === 'darwin') entries['/System/Library/OpenSSL'] = 'read';
     const codexHome = canonical(process.env.CODEX_HOME || join(home, '.codex'));
-    for (const name of ['sessions', 'archived_sessions', 'logs', 'sqlite']) entries[join(codexHome, name, '**')] = 'deny';
+    const privateRoots = [configDir(), config.mailCodexHome || join(configDir(), 'codex-mail'), config.dataDir, ...['sessions', 'archived_sessions', 'logs', 'sqlite'].map(name => join(codexHome, name))];
     entries[join(codexHome, '*.sqlite*')] = 'deny';
     const claude = canonical(process.env.CLAUDE_CONFIG_DIR || join(home, '.claude'));
-    if (existsSync(claude)) entries[claude] = 'deny';
+    if (executable) entries[dirname(canonical(executable))] = 'read';
+    if (process.platform === 'linux' && executable) {
+        // Pinned bwrap cannot reopen individual files beneath a denied parent.
+        // Keep the native account store outside broad project/tool grants so
+        // root-deny plus exact session/auth grants isolate it without a parent mask.
+        if (Object.entries(entries).some(([path, access]) => access !== 'deny' && path.startsWith('/') && within(claude, path))) throw Error('CLAUDE_HOME_OVERLAPS_SANDBOX_GRANT');
+    } else if (existsSync(claude)) entries[claude] = 'deny';
     if (existsSync(join(home, '.claude.json'))) entries[join(home, '.claude.json')] = 'deny';
     if (executable) {
         // Claude's complete process is sandboxed, including its native file tools.
-        entries[dirname(canonical(executable))] = 'read';
         if (!process.env.CLAUDE_CONFIG_DIR && existsSync(join(home, '.claude.json'))) entries[join(home, '.claude.json')] = 'read';
         for (const name of ['.credentials.json', 'settings.json', '.claude.json']) if (existsSync(join(claude,name))) entries[join(claude,name)] = 'read';
         const session = sessionOf(c);
@@ -121,19 +73,22 @@ export function nativeFilesystem(config: Config, c: Conversation, executable?: s
             entries[join(claude, 'session-env', session)] = 'write';
         }
     }
-    // Exact private parents do not contain writable task children. Keep these
-    // masks even when projectsRoot is broad or dataDir is inside projectsRoot.
-    for (const path of [configDir(), config.mailCodexHome || join(configDir(), 'codex-mail'), join(config.dataDir, 'artifacts'), join(config.dataDir, 'effect-logs'), join(config.dataDir, 'operation-locks'), join(config.dataDir, 'backups')]) {
-        entries[resolve(path)] = 'deny'; entries[join(resolve(path),'**')]='deny';
-        if (existsSync(path)) {entries[canonical(path)] = 'deny';entries[join(canonical(path),'**')]='deny';}
+    if (!/^[a-zA-Z0-9_-]+$/.test(c.id)) throw Error('INVALID_TASK_ID_FOR_SANDBOX');
+    if (config.githubTokenFile) privateRoots.push(config.githubTokenFile);
+    // Do not stack masks beneath a denied private parent: the pinned Linux
+    // helper otherwise tries to create child targets on an already frozen mount.
+    // Also remove narrower PATH/project grants that could reopen private mail.
+    const roots = [...new Set(privateRoots.map(canonical))].sort((a,b) => a.length - b.length);
+    const masked: string[] = [];
+    for (const root of roots) {
+        if (masked.some(parent => within(root, parent))) continue;
+        if (within(directory, root) && root !== canonical(config.dataDir)) throw Error('MAIL_TASK_OVERLAPS_PRIVATE_CONFIG');
+        for (const path of Object.keys(entries)) {
+            if (within(path, root) && !(root === canonical(config.dataDir) && within(path, directory))) delete entries[path];
+        }
+        entries[root] = 'deny';
+        masked.push(root);
     }
-    for (const dataDirectory of new Set([resolve(config.dataDir), canonical(config.dataDir)])) {
-        entries[join(dataDirectory, '*.sqlite*')] = 'deny';
-        for (const db of ['async-cli.sqlite', 'state.sqlite']) for (const suffix of ['', '-wal', '-shm']) entries[join(dataDirectory, db + suffix)] = 'deny';
-    }
-    if(!/^[a-zA-Z0-9_-]+$/.test(c.id))throw Error('INVALID_TASK_ID_FOR_SANDBOX');
-    protectDirectory(entries, canonical(config.dataDir), ['notes', 'tmp', 'worktrees', 'input'].map(name => `async-cli/features/${c.id}/${name}`));
-    if (config.githubTokenFile) entries[canonical(config.githubTokenFile)] = 'deny';
     // The live installation can only be upgraded manually. Feature copies remain writable.
     entries[canonical(installationRoot)] = 'read';
     if (existsSync(join(installationRoot,'.git'))) entries[canonical(join(installationRoot,'.git'))] = 'read';

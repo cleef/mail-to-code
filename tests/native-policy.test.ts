@@ -23,10 +23,10 @@ async function fixture() {
 test('static policy opens project/Git/task paths without scope or prepared worktrees and masks mail/state',async()=>{
     const {config}=await fixture(),rules=nativeFilesystem(config,c);
     assert.equal(rules[config.projectsRoot],'write');assert.equal(rules[join(config.dataDir,'async-cli/features/primary/notes')],'write');
-    assert.equal(rules[join(config.dataDir,'async-cli/features/primary/input')],'read');assert.ok(Object.keys(rules).some(p=>p.includes('features/{')&&p.includes('[!p]*')&&rules[p]==='deny'));
-    assert.equal(rules[config.mailCodexHome!],'deny');assert.equal(rules[join(config.dataDir,'async-cli.sqlite')],'deny');
-    assert.equal(rules[config.dataDir],'read');assert.equal(rules[join(config.dataDir,'async-cli/features/primary')],'read');
-    assert.equal(rules[join(config.dataDir,'*.sqlite*')],'deny');assert.equal(rules[join(config.dataDir,'artifacts')],'deny');
+    assert.equal(rules[join(config.dataDir,'async-cli/features/primary/input')],'read');
+    assert.equal(rules[config.mailCodexHome!],'deny');
+    assert.equal(rules[config.dataDir],'deny');assert.equal(rules[join(config.dataDir,'async-cli/features/primary')],'write');
+    assert.equal(rules[join(config.dataDir,'artifacts')],undefined); // The whole private parent is masked.
     assert.equal(rules[await realpath(installationRoot)],'read');assert.equal(rules[':root'],'deny');
     const policy=asyncPolicy(config,c).join('\n');assert.match(policy,/network.enabled=true/);assert.match(policy,/features.plugins=false/);assert.match(policy,/features.hooks=false/);
     assert.doesNotMatch(policy,/WRITABLE_SCOPE_REQUIRED|requestId|targetHash/);
@@ -40,8 +40,8 @@ test('a linked data directory still protects future database sidecars at the can
     const {root,config}=await fixture(),linked=join(root,'linked-state'),actual=config.dataDir;
     await symlink(actual,linked);config.dataDir=linked;
     const rules=nativeFilesystem(config,c);
-    assert.equal(rules[join(actual,'*.sqlite*')],'deny');assert.equal(rules[join(linked,'*.sqlite*')],'deny');
-    assert.equal(rules[join(actual,'artifacts','**')],'deny');
+    assert.equal(rules[actual],'deny');assert.equal(rules[join(actual,'async-cli/features/primary')],'write');
+    assert.equal(rules[join(actual,'artifacts','**')],undefined);
 });
 test('development auth is selected from host only; mail environment gets no development secrets',()=>{
     const source={HOME:'/synthetic/home',PATH:'/synthetic/bin',GITHUB_TOKEN:'synthetic',GH_CONFIG_DIR:'/synthetic/gh',GIT_SSH_COMMAND:'ssh -F /synthetic/ssh-config',SSH_AUTH_SOCK:'/synthetic/socket',ANTHROPIC_API_KEY:'model-only',MAIL_TO_CODE_CONFIG_DIR:'/synthetic/mail',NODE_OPTIONS:'unsafe'};

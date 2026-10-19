@@ -24,5 +24,9 @@ they require host sandbox support and (for model turns) authenticated model acce
 Missing runtime support is reported, not replaced by mocks. Actual mail delivery
 still requires separate owner-mail acceptance.
 
+CI runs the sandbox script on Ubuntu 24.04 with both pinned CLIs and no model
+credentials. The integration job propagates pipeline failures and requires a
+nonempty JSON report; retired project-check/container acceptance is no longer run.
+
 Record results, platform, exact versions and any missing runtime in the PR and
 [validation-native-passthrough.md](validation-native-passthrough.md).

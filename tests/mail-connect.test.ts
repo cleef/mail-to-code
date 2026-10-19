@@ -48,5 +48,5 @@ test('development policy disables apps; configured mail credentials are masked',
     const policy = asyncPolicy(config, {id:'test',subject:'Synthetic',gmailThread:'mail',createdAt:'now'});
     assert.ok(policy.includes('features.apps=false'));
     const table = policy.find(s => s.startsWith('permissions.mail-to-code-task.filesystem='))!;
-    assert.ok(table.includes(JSON.stringify(home) + '="deny"'));
+    assert.ok(table.includes(JSON.stringify(await realpath(home)) + '="deny"'));
 });

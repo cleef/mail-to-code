@@ -22,8 +22,15 @@ adapter installation is read-only. Private mail configuration/login, SQLite and 
 sidecars, frozen images/backups/diagnostics and other task runtime directories are
 masked. The policy must be accepted on the actual OS with the pinned CLI before use.
 Claude native history is limited to its session's files within its host history store.
-Runtime structural directories are read-only, preventing rename-based bypasses of
-child masks even when dataDir is nested inside the writable project root.
+The runtime parent is denied with only the current task directory reopened and
+input read-only. On Linux this creates a private mount view, so other task files
+created after sandbox startup stay hidden too. Redundant child masks are omitted
+to avoid pinned bubblewrap mount-order failures.
+
+On Linux, CLAUDE_CONFIG_DIR (default ~/.claude) must remain outside broad writable
+project and readable tool directories. The pinned helper cannot reopen individual
+session/auth files beneath a denied parent; root-deny and exact file grants protect
+this separate account store instead. Overlap fails closed before launching Claude.
 
 Development inherits a whitelist of host Git/gh/SSH config and credentials, model
 transport and proxy values. NODE_OPTIONS and arbitrary environment secrets are not
