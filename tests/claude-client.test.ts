@@ -12,6 +12,7 @@ import { AsyncBridge } from '../src/async-cli.js';
 import { executorOf, sessionOf } from '../src/executor.js';
 import type { Incoming } from '../src/types.js';
 import type { MailTransport } from '../src/delivery.js';
+import { claudeSessionStorage } from '../src/async-policy.js';
 
 const incoming = (id: string, subject = '[claude] Synthetic feature', inReplyTo = ''): Incoming => ({ id, threadId: 'mail', rfcId: `<${id}@example.test>`, inReplyTo, subject, text: 'Discuss the synthetic feature.', from: 'owner@example.test', trusted: true });
 const inventory = ['Bash','Read','Edit','Write','ToolSearch'];
@@ -109,11 +110,13 @@ test('Claude final reply is immutable and resumes the same native session across
         assert.equal(store.conversation(c.id)!.subject, i.subject);
         const session = sessionOf(store.conversation(c.id)!); assert.ok(session); assert.equal(store.conversation(c.id)!.codexThread, undefined);
         assert.equal(native.calls[0].options.sessionId, session); assert.equal(native.calls[0].options.resume, undefined);
+        assert.equal(native.calls[0].options.cwd, claudeSessionStorage(config, {...c, executorSession:session}).cwd);
         await bridge.stop(); bridge = new AsyncBridge(config, store, noMail, factory, undefined, root);
         await bridge.dispatch(store.conversation(c.id)!); assert.equal(store.mails().length, 1);
         const reply = incoming('second', '[codex] changed title', i.rfcId); store.intake(reply, 'raw', reply.text);
         await bridge.dispatch(store.conversation(c.id)!); await settle();
         assert.equal(native.calls[1].options.resume, session); assert.equal(store.mails().length, 2);
+        assert.equal(native.calls[1].options.cwd, native.calls[0].options.cwd);
         assert.equal(executorOf(store.conversation(c.id)!), 'claude');
         assert.ok(native.calls[1].options.systemPrompt.append.includes('primary Claude Code agent'));
     } finally { await bridge.stop(); store.close(); }

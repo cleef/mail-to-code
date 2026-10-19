@@ -12,6 +12,28 @@ const canonical = (path: string) => { try { return realpathSync(path); } catch {
 
 const within = (path: string, root: string) => path === root || path.startsWith(root.endsWith('/') ? root : root + '/');
 
+// Project-directory encoding used by the pinned Claude CLI/SDK, including long paths.
+export function claudeProjectKey(cwd: string) {
+    const path = canonical(cwd), key = path.replace(/[^a-zA-Z0-9]/g, '-');
+    if (key.length <= 200) return key;
+    let hash = 0;
+    for (let i = 0; i < path.length; i++) hash = ((hash << 5) - hash + path.charCodeAt(i)) | 0;
+    return key.slice(0, 200) + '-' + Math.abs(hash).toString(36);
+}
+export function claudeSessionStorage(config: Config, c: Conversation) {
+    const home = canonical(process.env.CLAUDE_CONFIG_DIR || join(expand('~'), '.claude'));
+    const taskCwd = canonical(join(canonical(config.dataDir), 'async-cli', 'features', c.id, 'claude'));
+    const taskProject = join(home, 'projects', claudeProjectKey(taskCwd));
+    const legacyProject = join(home, 'projects', claudeProjectKey(config.projectsRoot));
+    // Existing native histories stay in place. New sessions get a task-specific
+    // cwd, hence a private native project directory that can be mounted before
+    // the CLI creates its transcript. Never manufacture a session JSONL.
+    const session = sessionOf(c);
+    const legacy = !!session && !existsSync(join(taskProject, session + '.jsonl')) && existsSync(join(legacyProject, session + '.jsonl'));
+    const cwd = legacy ? canonical(config.projectsRoot) : taskCwd;
+    return { cwd, project: legacy ? legacyProject : taskProject, legacy };
+}
+
 // Linux re-executes the Codex native binary inside bwrap. npm's PATH shim and
 // platform binary are separate packages, including in a private temporary install.
 function commandRoots(command: string): string[] {
@@ -91,9 +113,11 @@ export function nativeFilesystem(config: Config, c: Conversation, executable?: s
         for (const name of ['.credentials.json', 'settings.json', '.claude.json']) if (existsSync(join(claude,name))) entries[join(claude,name)] = 'read';
         const session = sessionOf(c);
         if (session) {
-            const project = canonical(config.projectsRoot).replace(/[^a-zA-Z0-9]/g, '-');
-            entries[join(claude, 'projects', project, session + '.jsonl')] = 'write';
-            entries[join(claude, 'projects', project, session)] = 'write';
+            const storage = claudeSessionStorage(config, c);
+            if (storage.legacy) {
+                entries[join(storage.project, session + '.jsonl')] = 'write';
+                entries[join(storage.project, session)] = 'write';
+            } else entries[storage.project] = 'write';
             entries[join(claude, 'debug', session + '.txt')] = 'write';
             entries[join(claude, 'todos', session + '-agent-' + session + '.json')] = 'write';
             entries[join(claude, 'tasks', session)] = 'write';
@@ -143,15 +167,17 @@ export function asyncPolicy(config: Config, c: Conversation, executable?: string
 
 // Mount-based sandboxes need exact paths to exist before the policy is built.
 // Only this session's storage is prepared; historical sessions remain protected.
+// Transcript existence means "session already used" to Claude --session-id.
 export function prepareNativeFilesystem(config: Config, c: Conversation, executable?: string) {
     const directory = canonical(join(config.dataDir, 'async-cli', 'features', c.id));
     for (const name of ['notes', 'tmp', 'worktrees', 'input']) mkdirSync(join(directory, name), { recursive: true, mode: 0o700 });
     if (!executable || !sessionOf(c)) return;
     const claude = canonical(process.env.CLAUDE_CONFIG_DIR || join(expand('~'), '.claude'));
-    const project = canonical(config.projectsRoot).replace(/[^a-zA-Z0-9]/g, '-');
+    const storage = claudeSessionStorage(config, c);
     const session = sessionOf(c)!;
-    for (const path of [join(claude, 'projects', project, session), join(claude, 'debug'), join(claude, 'todos'), join(claude, 'session-env', session), join(claude, 'tasks', session)]) mkdirSync(path, { recursive: true, mode: 0o700 });
-    for (const path of [join(claude, 'projects', project, session + '.jsonl'), join(claude, 'debug', session + '.txt'), join(claude,'todos',session+'-agent-'+session+'.json')]) {
+    if (!storage.legacy) mkdirSync(storage.cwd, { recursive: true, mode: 0o700 });
+    for (const path of [join(storage.project, session), join(claude, 'debug'), join(claude, 'todos'), join(claude, 'session-env', session), join(claude, 'tasks', session)]) mkdirSync(path, { recursive: true, mode: 0o700 });
+    for (const path of [join(claude, 'debug', session + '.txt'), join(claude,'todos',session+'-agent-'+session+'.json')]) {
         try { writeFileSync(path, path.endsWith('.json') ? '[]' : '', { flag: 'wx', mode: 0o600 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
     }
 }

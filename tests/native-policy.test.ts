@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, symlink, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, access, symlink, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { ConfigSchema, expand } from '../src/config.js';
-import { nativeFilesystem, asyncPolicy, installationRoot } from '../src/async-policy.js';
+import { nativeFilesystem, asyncPolicy, installationRoot, prepareNativeFilesystem, claudeSessionStorage, claudeProjectKey } from '../src/async-policy.js';
 import { developmentEnvironment, shellEnvironment } from '../src/runner.js';
 import { spawnSandboxedClaude } from '../src/claude-client.js';
+import { getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 const c = { id: 'primary', subject: 'Synthetic', gmailThread: 'mail', createdAt: 'now' };
 test('home expansion resolves the host credential root rather than a relative tilde directory',()=>{
     assert.equal(expand('~'),homedir());assert.equal(expand('~/.ssh'),join(homedir(),'.ssh'));
@@ -65,4 +66,73 @@ test('Claude process launch never falls back when the sandbox launcher is unavai
     const child=spawnSandboxedClaude(config,c,process.execPath,{command:process.execPath,args:['-e','process.stdout.write("UNSANDBOXED")'],cwd:config.projectsRoot,env:{PATH:process.env.PATH},signal:new AbortController().signal});
     let output='';child.stdout.on('data',chunk=>{output+=chunk;});
     await new Promise<void>(resolve=>child.once('error',()=>resolve()));assert.equal(output,'');assert.equal(child.pid,undefined);
+});
+
+test('new Claude storage leaves the native session ID unused and mounts only its own project directory', async () => {
+    const {root, config} = await fixture(), previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = join(root, 'claude-home');
+    const task = {...c, executorSession:'11111111-1111-4111-8111-111111111111'};
+    try {
+        const initial = claudeSessionStorage(config, task);
+        prepareNativeFilesystem(config, task, process.execPath);
+        const storage = claudeSessionStorage(config, task), transcript = join(storage.project, task.executorSession + '.jsonl');
+        assert.deepEqual(storage, initial);
+        assert.equal(storage.legacy, false);
+        await assert.rejects(access(transcript), {code:'ENOENT'});
+        const rules = nativeFilesystem(config, task, process.execPath);
+        assert.equal(rules[storage.project], 'write');
+        assert.notEqual(rules[join(process.env.CLAUDE_CONFIG_DIR, 'projects')], 'write');
+        assert.notEqual(rules[join(process.env.CLAUDE_CONFIG_DIR, 'projects', claudeProjectKey(config.projectsRoot))], 'write');
+        // Simulate native creation, then restart preparation without overwriting history.
+        await writeFile(transcript, 'synthetic native history');
+        prepareNativeFilesystem(config, task, process.execPath);
+        assert.deepEqual(claudeSessionStorage(config, task), storage);
+        assert.equal(await readFile(transcript, 'utf8'), 'synthetic native history');
+        const other = {...task, id:'foreign', executorSession:'22222222-2222-4222-8222-222222222222'};
+        assert.notEqual(claudeSessionStorage(config, other).project, storage.project);
+    } finally {
+        if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
+    }
+});
+
+test('existing Claude sessions retain their original cwd, history bytes and exact sandbox grants', async () => {
+    const {root, config} = await fixture(), previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = join(root, 'claude-home');
+    const task = {...c, executorSession:'11111111-1111-4111-8111-111111111111'};
+    try {
+        const project = join(process.env.CLAUDE_CONFIG_DIR, 'projects', claudeProjectKey(config.projectsRoot));
+        await mkdir(project, {recursive:true});
+        const transcript = join(project, task.executorSession + '.jsonl');
+        await writeFile(transcript, 'synthetic existing history');
+        const existingCwd = join(config.dataDir, 'async-cli/features/primary/claude');
+        await mkdir(existingCwd); await writeFile(join(existingCwd, 'existing.txt'), 'synthetic task content');
+        prepareNativeFilesystem(config, task, process.execPath);
+        assert.deepEqual(claudeSessionStorage(config, task), {cwd:config.projectsRoot, project, legacy:true});
+        const rules = nativeFilesystem(config, task, process.execPath);
+        assert.equal(rules[transcript], 'write'); assert.notEqual(rules[project], 'write');
+        assert.equal(await readFile(transcript, 'utf8'), 'synthetic existing history');
+        assert.equal(await readFile(join(existingCwd, 'existing.txt'), 'utf8'), 'synthetic task content');
+    } finally {
+        if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
+    }
+});
+
+test('native project keys for long paths remain readable by the pinned SDK', async () => {
+    const {root} = await fixture(), previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = join(root, 'claude-home');
+    try {
+        const cwd = join(root, 'synthetic-project-'.repeat(8), 'synthetic-worktree-'.repeat(5));
+        await mkdir(cwd, {recursive:true});
+        assert.ok(cwd.length > 200);
+        const project = join(process.env.CLAUDE_CONFIG_DIR, 'projects', claudeProjectKey(cwd));
+        await mkdir(project, {recursive:true});
+        const session = '11111111-1111-4111-8111-111111111111';
+        await writeFile(join(project, session + '.jsonl'), JSON.stringify({type:'user', uuid:'22222222-2222-4222-8222-222222222222',
+            parentUuid:null, sessionId:session, cwd, message:{role:'user', content:'Synthetic long-path input.'}}) + '\n');
+        const messages = await getSessionMessages(session, {dir:cwd});
+        assert.equal(messages.length, 1);
+        assert.deepEqual(messages[0].message, {role:'user', content:'Synthetic long-path input.'});
+    } finally {
+        if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
+    }
 });
