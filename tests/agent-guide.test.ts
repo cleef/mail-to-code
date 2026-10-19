@@ -27,3 +27,14 @@ test('Agent guide rejects credentials, oversized/public files and symlinks witho
         await rm(path);await symlink('/etc/passwd',path);await assert.rejects(readAgentGuide(directory),/regular private file/);
     }finally{await rm(directory,{recursive:true,force:true});}
 });
+
+
+test('edited private async guide survives repeated initialization and contract refresh',async()=>{
+    const directory=await mkdtemp(join(tmpdir(),'async-guide-'));
+    try {
+        assert.equal((await initializeAgentGuide(directory,true)).created,true);
+        const path=join(directory,'ASYNC_AGENTS.md');await writeFile(path,'Synthetic edited operator convention.',{mode:0o600});
+        assert.equal((await initializeAgentGuide(directory,true)).created,false);
+        assert.equal(await readAgentGuide(directory,true),'Synthetic edited operator convention.');
+    } finally {await rm(directory,{recursive:true,force:true});}
+});

@@ -1,6 +1,6 @@
 import { join } from 'node:path';
-import { writeFile,lstat } from 'node:fs/promises';
-import { configDir, loadConfig, privateDir, privateFile, type Config } from './config.js';
+import { writeFile } from 'node:fs/promises';
+import { configDir, loadConfig, privateDir, type Config } from './config.js';
 import { CodexGmailTransport,closeMailTransports } from './gmail.js';
 import {migrateMail} from './mail-migration.js';
 import { safeError } from './errors.js';
@@ -21,9 +21,10 @@ async function main(){
     const args=process.argv.slice(3),value=(key:string)=>args[args.indexOf(key)+1];
     if(!args.includes('--gmail')||!args.includes('--owner'))throw new Error('init --gmail agent@gmail.com --owner owner@qq.com');
     await privateDir(configDir());const path=join(configDir(),'config.json');
-    const config={engine:'async-cli',asyncMailOutput:'assistant-final',gmailAddress:value('--gmail'),ownerAddress:value('--owner'),dataDir:'~/.local/share/mail-to-code',codexCommand:'codex',mailCodexHome:join(configDir(),'codex-mail'),githubTokenFile:'~/.config/mail-to-code/github-token',projectsRoot:'~/projects',repositories:{},profiles:{}};
+    const config={engine:'async-cli',asyncMailOutput:'assistant-final',gmailAddress:value('--gmail'),ownerAddress:value('--owner'),dataDir:'~/.local/share/mail-to-code',codexCommand:'codex',mailCodexHome:join(configDir(),'codex-mail'),projectsRoot:'~/projects',repositories:{},profiles:{}};
     await writeFile(path,JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});await initializeAgentGuide();await initializeAgentGuide(undefined,true);await initializeWorkflowGuide();console.log(`Created ${path}; edit private settings, then run mail-connect and doctor.`);return;
   }
+  if(['async-reconcile','async-resolve-failed'].includes(command))throw Error('OPERATION_GATEWAY_RETIRED: inspect historical operation records with async-status; use native tools for new work');
   const config=await loadConfig(['mail-connect','mail-plugin-check'].includes(command));
   if(command==='mail-connect'){await connectMail(config,process.argv.includes('--device-auth'));return;}
   if(command==='mail-plugin-check'){const result=await checkMailPlugin(config);console.log(JSON.stringify(result,null,2));if(!result.ok)process.exitCode=2;return;}
@@ -32,27 +33,18 @@ async function main(){
     await (await import('./async-cli.js')).serveAsync(config);return;
   }
   if(command==='async-doctor'||command==='doctor'&&config.engine==='async-cli'){const result=await(await import('./async-cli.js')).doctorAsync(config);console.log(JSON.stringify(result,null,2));if(!result.ok)process.exitCode=2;return;}
-  if(command==='async-status'||command==='async-mail-errors'||command==='async-import'||command==='async-adopt'||command==='async-reconcile'||command==='async-resolve-failed'||command==='async-reconcile-input'||command==='async-reconcile-send'){
+  if(command==='async-status'||command==='async-mail-errors'||command==='async-import'||command==='async-adopt'||command==='async-reconcile-input'||command==='async-reconcile-send'){
     const {AsyncStore}=await import('./async-store.js'),{importLegacy}=await import('./async-cli.js');
     const readOnly=['async-status','async-mail-errors'].includes(command);
     const release=readOnly?async()=>{}:await acquireLease(config.dataDir),asyncStore=new AsyncStore(join(config.dataDir,'async-cli.sqlite'),readOnly);
     try{
       if(command==='async-mail-errors'){const id=process.argv[3];if(!id||!asyncStore.mail(id))throw Error('async-mail-errors <mail-id>: existing outbound mail required');console.log(JSON.stringify(asyncStore.all<{mailId:string}>('mail-error').filter(e=>e.mailId===id),null,2));}
       else if(command==='async-reconcile-input'){if(!process.argv.includes('--verified-not-accepted'))throw Error('Inspect native thread history and effects first: async-reconcile-input <input-id> --verified-not-accepted');console.log(JSON.stringify(asyncStore.requeueInput(process.argv[3])));}
-      else if(command==='async-resolve-failed'){
-        const c=asyncStore.conversation(process.argv[3]), index=process.argv.indexOf('--evidence-file'), path=index>=0?process.argv[index+1]:undefined;
-        if(!c||!process.argv[4]||!path)throw Error('async-resolve-failed <feature-id> <operation-id> --evidence-file <private-json>: inspect all effects and confirm none remain in flight first');
-        const info=await lstat(path);if(!info.isFile()||info.isSymbolicLink())throw Error('RESOLUTION_EVIDENCE_REGULAR_FILE_REQUIRED');
-        await privateFile(path);if(info.size>65536)throw Error('RESOLUTION_EVIDENCE_TOO_LARGE');
-        const {readFile}=await import('node:fs/promises'),{AsyncTools}=await import('./async-tools.js');
-        console.log(JSON.stringify(await new AsyncTools(config,asyncStore,c,new AbortController().signal).resolveFailed(process.argv[4],JSON.parse(await readFile(path,'utf8')))));
-      }
       else if(command==='async-reconcile-send'){const {AsyncBridge}=await import('./async-cli.js'),gmail=await CodexGmailTransport.create(config);await gmail.verify();console.log(JSON.stringify(await new AsyncBridge(config,asyncStore,gmail).reconcileSend(process.argv[3],process.argv.includes('--verified-absent'))));}
-      else if(command==='async-reconcile'){const c=asyncStore.conversation(process.argv[3]);if(!c||!process.argv[4])throw Error('async-reconcile <feature-id> <operation-id> [--verified-no-effect]');const {AsyncTools}=await import('./async-tools.js');console.log(JSON.stringify(await new AsyncTools(config,asyncStore,c,new AbortController().signal).reconcile(process.argv[4],process.argv.includes('--verified-no-effect'))));}
       else if(command==='async-adopt'){const c=asyncStore.conversation(process.argv[3]);if(!c?.paused||!process.argv.includes('--verified-runtime'))throw Error('async-adopt <id> --verified-runtime: first inspect actual versions, worktrees and uncertain operations; old approvals are never restored');c.paused=false;asyncStore.save(c);console.log(JSON.stringify({id:c.id,adopted:true,replayed:0,restoredGrants:0}));}
       else console.log(JSON.stringify(command==='async-import'?importLegacy(asyncStore,join(config.dataDir,'state.sqlite')):{conversations:asyncStore.conversations(),pendingInputs:asyncStore.inputs().filter(e=>e.status!=='accepted').map(e=>({id:e.id,status:e.status})),outbox:asyncStore.mails().map(mailStatus),heldReplies:[...asyncStore.all('final-held'),...asyncStore.all<any>('mail-held').filter(h=>h.status==='held')],operations:asyncStore.all('operation')},null,2));}
     finally{asyncStore.close();await release();}return;
   }
-  throw new Error('Commands: init, agent-guide, workflow-guide, async-agent-guide, mail-connect, mail-plugin-check, migrate-mail, serve, async-doctor, async-status, async-mail-errors, async-import, async-adopt, async-reconcile, async-reconcile-input, async-reconcile-send, async-resolve-failed');
+  throw new Error('Commands: init, agent-guide, workflow-guide, async-agent-guide, mail-connect, mail-plugin-check, migrate-mail, serve, async-doctor, async-status, async-mail-errors, async-import, async-adopt, async-reconcile-input, async-reconcile-send');
 }
 main().then(async()=>{if(!['serve','serve-async'].includes(command))await closeMailTransports();}).catch(async e=>{await closeMailTransports();console.error(safeError(e));process.exitCode=1;});

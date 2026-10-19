@@ -1,3 +1,4 @@
+// Legacy project profile shapes are retained as inert agent context.
 import { z } from 'zod/v3';
 export const CommandSchema = z.object({ executable: z.string().min(1), args: z.array(z.string()).default([]), cwd: z.string().default('.'), env: z.record(z.string()).default({}) }).strict();
 const relative = z.string().refine(p => !p.startsWith('/') && !p.split(/[\\/]/).includes('..') && !/[\r\n\0]/.test(p), 'Expected a worktree-relative path');
@@ -13,25 +14,3 @@ export const ProfileSchema = z.object({
     pendingChecks: z.array(z.string()).default([])
 }).strict();
 export type ProjectProfile = z.infer<typeof ProfileSchema>;
-export function validateProfile(input: unknown): ProjectProfile {
-    const p = ProfileSchema.parse(input);
-    for (const c of [...p.install, ...p.build, ...p.checks]) {
-        relative.parse(c.cwd);
-        if (/[\r\n\0]/.test(c.executable) || /^(ssh|sudo|su|podman|docker|systemctl|gh|git)$/.test(c.executable.split('/').at(-1)!))
-            throw new Error('Privileged/controller commands cannot be profile steps');
-        for (const k of Object.keys(c.env))
-            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || /TOKEN|SECRET|PASSWORD|PRIVATE|SSH|GH_|GITHUB|GMAIL|MAIL_TO_CODE|MAIL_AGENT|CODEX_HOME|LD_PRELOAD|NODE_OPTIONS/i.test(k))
-                throw new Error('Profile environment cannot contain credentials or runtime injection');
-    }
-    for(const path of p.generatedFiles)if(!path||path==='.'||path.split('/').some(v=>['.git','.codex','.agents','node_modules'].includes(v)))throw Error('Invalid generated source file');
-    if (p.services.length && !p.image)
-        throw new Error('Local services require a pinned test runtime image');
-    for (const service of p.services)
-        for (const k of Object.keys(service.env))
-            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || /TOKEN|SECRET|PRIVATE|SSH|GH_|GITHUB|GMAIL/i.test(k))
-                throw new Error('Service credentials must be synthetic test data');
-    for (const path of p.preview.paths)
-        if (!path.startsWith('/') || path.startsWith('//'))
-            throw new Error('Preview paths must be local');
-    return p;
-}

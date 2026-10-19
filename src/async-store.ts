@@ -33,24 +33,6 @@ export interface InputEvent {
         size: number;
     }[];
 }
-export interface ApprovalRequest {
-    id: string;
-    conversationId: string;
-    mailId: string;
-    kind: 'scope' | 'merge' | 'deploy';
-    target: unknown;
-    sourceMailId?: string;
-    evidence?: string;
-}
-export interface Operation {
-    id: string;
-    conversationId: string;
-    key: string;
-    input: unknown;
-    status: 'running' | 'done' | 'uncertain';
-    result?: unknown;
-    report?: import('./operation-report.js').OperationReport;
-}
 // This database stores transport/runtime facts. Business progress lives in FEATURE.md.
 export class AsyncStore {
     readonly db: DatabaseSync;
@@ -94,14 +76,6 @@ export class AsyncStore {
         }[]).map(r => JSON.parse(r.value));
     }
     put(kind: string, id: string, value: unknown) {
-        if(kind==='request') {
-            const previous=this.get<ApprovalRequest>(kind,id),next=value as ApprovalRequest;
-            if(previous?.mailId && ['kind','target','mailId'].some(k=>JSON.stringify((previous as any)[k])!==JSON.stringify((next as any)[k])))throw Error('IMMUTABLE_CONFIRMATION_TARGET');
-        }
-        if(kind==='mail-request') {
-            const previous=this.get(kind,id);
-            if(previous!==undefined && JSON.stringify(previous)!==JSON.stringify(value))throw Error('IMMUTABLE_CONFIRMATION_TARGET');
-        }
         this.db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET value=excluded.value').run(kind, id, JSON.stringify(value));
     }
     remove(kind: string, id: string) { this.db.prepare('DELETE FROM records WHERE kind=? AND id=?').run(kind, id); }
@@ -198,14 +172,14 @@ export class AsyncStore {
             return c;
         });
     }
-    queue(c: Conversation, key: string, text: string, request?: Omit<ApprovalRequest, 'id' | 'conversationId' | 'mailId'>, preparedId?: string) {
+    queue(c: Conversation, key: string, text: string) {
         return this.transaction(() => {
             const dedupId = c.id + ':' + key, existingId = this.get<string>('mail-key', dedupId);
             if (existingId) {
                 const old = this.mail(existingId)!;
-                if (old.text !== text || JSON.stringify(this.get('mail-request', old.id)) !== JSON.stringify(request || null))
+                if (old.text !== text)
                     throw Error('MAIL_KEY_REUSED_WITH_DIFFERENT_CONTENT');
-                return { mail: old, request: this.all<ApprovalRequest>('request').find(r => r.mailId === old.id) };
+                return { mail: old };
             }
             // Preserve the native answer verbatim for audit. The immutable MIME
             // snapshot adds transport metadata without changing thread subjects.
@@ -214,26 +188,7 @@ export class AsyncStore {
             const id = randomUUID(), mail: Outbound = { id, sessionId: c.id, kind: 'agent', text, ...frozen, replySourceId:parent?.id, status: 'pending', createdAt: new Date().toISOString(), attempts: 0, deliveryMarker: id };
             this.saveMail(mail);
             this.put('mail-key', dedupId, id);
-            this.put('mail-request', id, request || null);
-            const r = request ? { ...request, id: preparedId || randomUUID(), conversationId: c.id, mailId: id } : undefined;
-            if (r)
-                this.put('request', r.id, r);
-            return { mail, request: r };
-        });
-    }
-    prepareConfirmation(c: Conversation, turnId: string, key: string, proposed: Pick<ApprovalRequest, 'kind' | 'target'>) {
-        if (!turnId) throw Error('ACTIVE_TURN_REQUIRED');
-        return this.transaction(() => {
-            const id = c.id + ':' + turnId, previous = this.get<{ key: string; requestId: string }>('turn-confirmation', id);
-            if (previous) {
-                const request = this.get<ApprovalRequest>('request', previous.requestId)!;
-                if (JSON.stringify({ kind: request.kind, target: request.target }) !== JSON.stringify(proposed)) throw Error('TURN_CONFIRMATION_TARGET_CHANGED');
-                return request;
-            }
-            const request: ApprovalRequest = { ...proposed, id: randomUUID(), conversationId: c.id, mailId: '' };
-            this.put('request', request.id, request);
-            this.put('turn-confirmation', id, { key, requestId: request.id });
-            return request;
+            return { mail };
         });
     }
     queueFinal(c: Conversation, turnId: string, text: string, itemIds: string[]) {
@@ -241,53 +196,9 @@ export class AsyncStore {
             const id = c.id + ':' + turnId;
             const existing = this.get<{ mailId: string }>('turn-output', id);
             if (existing) return this.mail(existing.mailId)!;
-            const prepared = this.get<{ requestId: string }>('turn-confirmation', id);
-            const request = prepared ? this.get<ApprovalRequest>('request', prepared.requestId)! : undefined;
-            const queued = this.queue(c, 'assistant-final:' + turnId, text, request ? { kind: request.kind, target: request.target } : undefined, request?.id);
+            const queued = this.queue(c, 'assistant-final:' + turnId, text);
             this.put('turn-output', id, { turnId, itemIds, mailId: queued.mail.id });
             return queued.mail;
         });
-    }
-    authorize(conversationId: string, requestId: string, sourceMailId: string, evidence: string) {
-        const r = this.get<ApprovalRequest>('request', requestId), e = this.input(sourceMailId);
-        if (!r || r.conversationId !== conversationId || !e || e.conversationId !== conversationId || !e.incoming.trusted)
-            throw Error('APPROVAL_SOURCE_MISMATCH');
-        const m = this.mail(r.mailId)!;
-        if (!m || m.identityStatus !== 'verified' || !m.rfcMessageId || e.incoming.inReplyTo !== m.rfcMessageId)
-            throw Error('APPROVAL_REPLY_BINDING_REQUIRED');
-        if (!evidence.trim() || !e.incoming.text.includes(evidence))
-            throw Error('APPROVAL_EVIDENCE_NOT_IN_NEW_BODY');
-        if (r.sourceMailId && r.sourceMailId !== sourceMailId)
-            throw Error('APPROVAL_ALREADY_RECORDED');
-        r.sourceMailId = sourceMailId;
-        r.evidence = evidence;
-        this.put('request', r.id, r);
-        return r;
-    }
-    async effect<T>(conversationId: string, key: string, input: unknown, fn: () => Promise<T>): Promise<T> {
-        const id = conversationId + ':' + key, existing = this.get<Operation>('operation', id);
-        if (existing) {
-            if (JSON.stringify(existing.input) !== JSON.stringify(input))
-                throw Error('OPERATION_KEY_INPUT_MISMATCH');
-            if (existing.status === 'done')
-                return existing.result as T;
-            throw Error('OPERATION_UNCERTAIN_RECONCILE_BEFORE_RETRY');
-        }
-        const op: Operation = { id, conversationId, key, input, status: 'running' };
-        this.put('operation', id, op);
-        try {
-            const result = await fn();
-            Object.assign(op, this.get<Operation>('operation', id));
-            op.status = 'done';
-            op.result = result;
-            this.put('operation', id, op);
-            return result;
-        }
-        catch (e) {
-            Object.assign(op, this.get<Operation>('operation', id));
-            op.status = 'uncertain';
-            this.put('operation', id, op);
-            throw e;
-        }
     }
 }

@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { access, realpath, readFile, lstat } from 'node:fs/promises';
@@ -5,19 +6,19 @@ import { constants } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { z } from 'zod';
-import { createSdkMcpServer, query, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { createSdkMcpServer, query, type Options, type SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { Config } from './config.js';
 import type { ServerRequest } from './app-server.js';
 import type { ExecutorClient } from './executor.js';
 import { sessionOf } from './executor.js';
 import type { AsyncStore, Conversation } from './async-store.js';
-import { ASYNC_TOOLS, WORKSPACE_TOOL } from './async-tools.js';
+import { ASYNC_TOOLS } from './async-tools.js';
 import { execute } from './process.js';
-import { shellEnvironment } from './runner.js';
+import { asyncPolicy, prepareNativeFilesystem } from './async-policy.js';
+import { developmentEnvironment, shellEnvironment } from './runner.js';
 
 export const ASYNC_CLAUDE_VERSION = '2.1.296';
-const DEFINITIONS = [...ASYNC_TOOLS, WORKSPACE_TOOL];
-const toolNames = DEFINITIONS.map(t => 'mcp__mail_to_code__' + t.name);
+const mailTool = 'mcp__mail_to_code__queue_mail';
 export interface ClaudeRun extends AsyncIterable<any> {
     initializationResult(): Promise<any>;
     close(): void;
@@ -30,7 +31,7 @@ export interface ClaudeRuntime {
 const runtime: ClaudeRuntime = {
     query,
     messages: async (id, dir) => (await import('@anthropic-ai/claude-agent-sdk')).getSessionMessages(id, { dir }),
-    environment: () => claudeEnvironment(join(homedir(), '.claude', 'settings.json')),
+    environment: () => claudeEnvironment(join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'settings.json')),
 };
 type Turn = { id: string; status: string; items: any[] };
 type Journal = { conversationId: string; sessionId: string; promptId: string; prompt: string; accepted: boolean; turn: Turn };
@@ -51,7 +52,7 @@ export async function checkClaude(command: string) {
 }
 const authKeys = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL'] as const;
 // Read only operator-owned model transport values. Never execute settings,
-// inherit hook/plugin definitions or pass credentials to workspace commands.
+// inherit hook/plugin definitions. Development credentials come from host environment only.
 export async function claudeEnvironment(settingsFile: string, environment: NodeJS.ProcessEnv = process.env) {
     let settings: Record<string, unknown> = {};
     try {
@@ -62,7 +63,7 @@ export async function claudeEnvironment(settingsFile: string, environment: NodeJ
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw Error('CLAUDE_AUTH_SETTINGS_INVALID');
     }
-    const result = shellEnvironment();
+    const result = developmentEnvironment(undefined, environment);
     for (const key of authKeys) {
         const value = environment[key] ?? settings[key];
         if (value !== undefined && typeof value !== 'string') throw Error('CLAUDE_AUTH_SETTINGS_INVALID');
@@ -70,19 +71,33 @@ export async function claudeEnvironment(settingsFile: string, environment: NodeJ
     }
     return result;
 }
-export function claudeOptions(config: Config, executable: string, environment = shellEnvironment()): Options {
+export function claudeOptions(config: Config, executable: string, environment = developmentEnvironment()): Options {
     return {
         pathToClaudeCodeExecutable: executable, cwd: config.projectsRoot,
         env: { ...environment, CLAUDE_CODE_SAFE_MODE: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
-        tools: [], allowedTools: toolNames, permissionMode: 'dontAsk', permissionPrompts: 'none',
+        tools: { type: 'preset', preset: 'claude_code' },
+        permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true, permissionPrompts: 'none',
+        canUseTool: async () => ({ behavior: 'deny', message: 'Asynchronous email session: write this question in your final reply, finish this turn and wait for the next user email.' }),
         settingSources: [], strictMcpConfig: true, plugins: [], persistSession: true,
         settings: { disableAllHooks: true, autoMemoryEnabled: false },
         extraArgs: { 'disable-slash-commands': null, 'replay-user-messages': null },
     };
 }
 
-// Only controller tools run commands. Claude's process owns model authentication
-// and native history, but has no model-callable native tools, hooks or plugins.
+// Native development tools run inside the same OS sandbox as the entire CLI.
+// There is no unsandboxed fallback or controller operation bridge.
+export function spawnSandboxedClaude(config: Config, conversation: Conversation, executable: string, options: SpawnOptions) {
+    prepareNativeFilesystem(config, conversation, executable);
+    const child = spawn(config.codexCommand, ['sandbox', ...asyncPolicy(config, conversation, executable), '-P', 'mail-to-code-task', '-C', config.projectsRoot, '--', options.command, ...options.args], {
+        cwd: options.cwd || config.projectsRoot, env: options.env, signal: options.signal, stdio: 'pipe', detached: true,
+    });
+    const nativeKill = child.kill.bind(child);
+    child.kill = (signal: NodeJS.Signals | number = 'SIGTERM') => {
+        try { if (child.pid) { process.kill(-child.pid, signal); return true; } } catch { /* already exited */ }
+        return nativeKill(signal);
+    };
+    return child;
+}
 export class ClaudeClient extends EventEmitter implements ExecutorClient {
     readonly supportsSteering = false;
     private session = '';
@@ -150,7 +165,7 @@ export class ClaudeClient extends EventEmitter implements ExecutorClient {
             yield { type: 'user', uuid: journal.promptId, session_id: session, parent_tool_use_id: null,
                 client_composed: true, message: { role: 'user', content: journal.prompt } };
         })();
-        const server = createSdkMcpServer({ name: 'mail_to_code', version: '1.0.0', alwaysLoad: true, tools: DEFINITIONS.map(definition => ({
+        const server = createSdkMcpServer({ name: 'mail_to_code', version: '1.0.0', alwaysLoad: true, tools: ASYNC_TOOLS.map(definition => ({
             name: definition.name, description: definition.description,
             inputSchema: (z.fromJSONSchema(definition.inputSchema as any) as z.ZodObject).shape,
             handler: async (args: unknown) => {
@@ -161,17 +176,18 @@ export class ClaudeClient extends EventEmitter implements ExecutorClient {
                 return { content: result.contentItems.map(item => ({ type: 'text' as const, text: item.text })), isError: !result.success };
             },
         })) });
-        const run = this.sdk.query({ prompt, options: { ...claudeOptions(this.config, this.executable, this.environment),
+        const run = this.sdk.query({ prompt, options: { ...claudeOptions(this.config, this.executable, { ...this.environment, ...developmentEnvironment(join(this.config.dataDir, 'async-cli', 'features', this.conversation.id, 'tmp'), this.environment) }),
             ...(resume ? { resume: session } : { sessionId: session }),
-            systemPrompt: { type: 'custom', prompt: this.instructions, snapshot: false },
-            mcpServers: { mail_to_code: server },
+            systemPrompt: { type: 'preset', preset: 'claude_code', append: this.instructions },
+            mcpServers: this.config.asyncMailOutput === 'queue-mail' ? { mail_to_code: server } : {},
+            spawnClaudeCodeProcess: options => spawnSandboxedClaude(this.config, { ...this.conversation, executorSession: session }, this.executable, options),
         } });
         this.active = run;
         const timer = setTimeout(() => run.close(), this.config.timeoutSeconds * 1000);
         let resultSeen = false;
         try {
             const init = await run.initializationResult();
-            // Fail closed if native tools or missing bridge tools change the contract.
+            // Reject inherited MCP tools while retaining the native development inventory.
             // initializationResult supplies capabilities; the system init event below
             // supplies the actual model-visible tool inventory.
             if (!init) throw Error('CLAUDE_INITIALIZATION_MISSING');
@@ -180,7 +196,8 @@ export class ClaudeClient extends EventEmitter implements ExecutorClient {
                 if (event.parent_tool_use_id) continue;
                 if (event.session_id && event.session_id !== session) throw Error('CLAUDE_SESSION_MISMATCH');
                 if (event.type === 'system' && event.subtype === 'init') {
-                    if (!Array.isArray(event.tools) || event.tools.some((name: string) => !toolNames.includes(name) && name !== 'EndConversation' && name !== 'ToolSearch') || !toolNames.every(name => event.tools.includes(name))) throw Error('CLAUDE_TOOL_ISOLATION_FAILED');
+                    const allowedMail = this.config.asyncMailOutput === 'queue-mail';
+                    if (!Array.isArray(event.tools) || !['Bash', 'Read', 'Edit', 'Write'].every(name => event.tools.includes(name)) || event.tools.some((name: string) => name.startsWith('mcp__') && (!allowedMail || name !== mailTool))) throw Error('CLAUDE_TOOL_ISOLATION_FAILED');
                 }
                 if (event.type === 'user' && event.uuid === journal.promptId && contentText(event.message?.content) === journal.prompt && !journal.accepted) accept();
                 if (event.type !== 'result') continue;

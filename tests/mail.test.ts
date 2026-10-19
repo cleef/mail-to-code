@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanReply, parseIncoming, authenticated } from '../src/mail.js';
-import { assertProjectChanges } from '../src/git.js';
-import { codexPolicy, shellEnvironment } from '../src/runner.js';
+import { developmentEnvironment, shellEnvironment } from '../src/runner.js';
 import { ConfigSchema } from '../src/config.js';
 
 const owner='owner@qq.com';
@@ -21,12 +20,13 @@ test('sender spoofing, duplicates and automatic replies rejected',async()=>{
   const record={key:'authentication-results',line:'Authentication-Results: mx.google.com; dkim=pass; dmarc=pass header.from=qq.com'};
   assert.equal(authenticated([record,record],owner),false);assert.equal(authenticated([{...record,line:record.line.replace('qq.com','evilqq.com')}],owner),false);
 });
-test('Project scope permits application/build code and denies protected paths',()=>{assertProjectChanges(['src/App.tsx','scripts/build.mjs','package.json']);for(const path of ['.codex/config.toml','src/.env','node_modules/pkg.js','secrets/key.pem'])assert.throws(()=>assertProjectChanges([path]));});
-test('runner policy excludes credential paths and shell environment strips secrets',()=>{
-  const config=ConfigSchema.parse({gmailAddress:'a@gmail.com',ownerAddress:owner,repositories:{sampleapp:{path:'/repo',github:'example-org/sampleapp'}}});
-  const args=codexPolicy(config,'/work/task','develop').join(' ');
-  assert.match(args,/approval_policy="never"/);assert.match(args,/":root"="deny"/);assert.match(args,/network.enabled=false/);assert.match(args,/mcp_servers.gmail.enabled=false/);
-  process.env.GITHUB_TOKEN='fixture';assert.equal(shellEnvironment().GITHUB_TOKEN,undefined);delete process.env.GITHUB_TOKEN;
+test('mail and development credentials use separate environments',()=>{
+  const source={PATH:'/synthetic/bin',HOME:'/synthetic/home',GH_TOKEN:'synthetic',SSH_AUTH_SOCK:'/synthetic/ssh',MAIL_TO_CODE_SECRET:'synthetic',NODE_OPTIONS:'--require=unsafe'};
+  assert.equal(shellEnvironment(source).GH_TOKEN,undefined);
+  assert.equal(developmentEnvironment(undefined,source).GH_TOKEN,'synthetic');
+  assert.equal(developmentEnvironment(undefined,source).SSH_AUTH_SOCK,'/synthetic/ssh');
+  assert.equal(developmentEnvironment(undefined,source).MAIL_TO_CODE_SECRET,undefined);
+  assert.equal(developmentEnvironment(undefined,source).NODE_OPTIONS,undefined);
 });
 test('runner preserves operator proxy routing without forwarding controller credentials',()=>{
   const values={HTTPS_PROXY:'http://127.0.0.1:34210',http_proxy:'http://127.0.0.1:34210',NO_PROXY:'localhost,127.0.0.1',GITHUB_TOKEN:'fixture',MAIL_TO_CODE_SECRET:'fixture'};

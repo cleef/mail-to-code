@@ -1,3 +1,9 @@
+# Historical image validation
+
+This report predates native passthrough. Gateway scope/confirmation assertions and
+retired script results below are historical, not current acceptance. See
+[validation](validation.md) for current checks.
+
 # Inline-image reply validation
 
 Validated on 2026-10-08 with Node 22.23.2 and the pinned Codex CLI 0.159.2.

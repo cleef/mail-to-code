@@ -3,19 +3,20 @@ import {simpleParser} from 'mailparser';
 import type {Config} from './config.js';
 import type {MailTransport} from './mail-transport.js';
 import {matchesFrozenBody} from './mail-quote.js';
-import type {Outbound,Session} from './types.js';
-import type {Store} from './store.js';
+import type {Outbound} from './types.js';
+interface DeliveryTask { id: string; subject: string; threadId?: string; }
+export interface DeliveryStore { mail(id: string): Outbound | undefined; mails(): Outbound[]; saveMail(m: Outbound): void; session(id: string): DeliveryTask | undefined; save(s: DeliveryTask): void; }
 import {mailDiagnostic, type MailPhase} from './mail-diagnostics.js';
 export type {MailTransport} from './mail-transport.js';
 const body=(text:string)=>text.replace(/\r\n/g,'\n').trim();
 export class Delivery {
- constructor(readonly config:Config,readonly store:Store,readonly mail:MailTransport,readonly onError?:(m:Outbound,error:unknown,phase:MailPhase)=>void){}
+ constructor(readonly config:Config,readonly store:DeliveryStore,readonly mail:MailTransport,readonly onError?:(m:Outbound,error:unknown,phase:MailPhase)=>void){}
  private pending(m:Outbound,code:string,result:'pending'|'absent'|'ambiguous'='pending',error?:unknown,phase:'search'|'read'='read'){
   m.identityStatus='pending';m.identityError=code;m.identityDiagnostic=error===undefined?undefined:mailDiagnostic(m,phase,error);
   if(error!==undefined)this.onError?.(m,error,phase);
   this.store.saveMail(m);return result;
  }
- async inspect(m:Outbound,s:Session,id:string){
+ async inspect(m:Outbound,s:DeliveryTask,id:string){
   const raw=await this.mail.read(id),p=await simpleParser(Buffer.from(raw.raw,'base64url'),{keepCidLinks:true});
   const expected=(m.bodySnapshot?.text ?? m.text)+(m.deliveryMarker?`\n\n[MAIL-REF: ${m.deliveryMarker}]`:'');
   const from=p.from?.value,to=p.to?(Array.isArray(p.to)?p.to.flatMap(v=>v.value):p.to.value):[];

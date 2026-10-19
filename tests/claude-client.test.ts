@@ -7,14 +7,14 @@ import { randomUUID } from 'node:crypto';
 import { ClaudeClient, claudeOptions, claudeEnvironment, type ClaudeRuntime } from '../src/claude-client.js';
 import { ConfigSchema } from '../src/config.js';
 import { AsyncStore } from '../src/async-store.js';
-import { ASYNC_TOOLS, WORKSPACE_TOOL, AsyncTools } from '../src/async-tools.js';
+import { ASYNC_TOOLS, AsyncTools } from '../src/async-tools.js';
 import { AsyncBridge } from '../src/async-cli.js';
 import { executorOf, sessionOf } from '../src/executor.js';
 import type { Incoming } from '../src/types.js';
 import type { MailTransport } from '../src/delivery.js';
 
 const incoming = (id: string, subject = '[claude] Synthetic feature', inReplyTo = ''): Incoming => ({ id, threadId: 'mail', rfcId: `<${id}@example.test>`, inReplyTo, subject, text: 'Discuss the synthetic feature.', from: 'owner@example.test', trusted: true });
-const inventory = [...ASYNC_TOOLS, WORKSPACE_TOOL].map(t => 'mcp__mail_to_code__' + t.name);
+const inventory = ['Bash','Read','Edit','Write','ToolSearch'];
 async function fixture() {
     const root = await mkdtemp(join(tmpdir(), 'dual-executor-test-'));
     const config = ConfigSchema.parse({ engine: 'async-cli', asyncMailOutput: 'assistant-final', gmailAddress: 'agent@example.test', ownerAddress: 'owner@example.test', projectsRoot: join(root, 'projects'), dataDir: root });
@@ -49,7 +49,7 @@ function fakeRuntime(options: { ack?: boolean; fail?: boolean; persist?: boolean
     return { sdk, calls, messages };
 }
 const noMail: MailTransport = { profile: async () => ({ emailAddress: 'agent@example.test', historyId: '0' }), search: async () => [], read: async () => { throw Error('No mail'); }, send: async () => { throw Error('No sends'); } };
-const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+const settle = () => new Promise(resolve => setTimeout(resolve, 80));
 
 test('new subjects select once; reply references, duplicates and old conversations retain their executor', async () => {
     const { store } = await fixture();
@@ -71,41 +71,15 @@ test('new subjects select once; reply references, duplicates and old conversatio
     } finally { store.close(); }
 });
 
-test('both executors share exact delivered confirmation bindings and uncertain effect guards', async () => {
-    const { config, store } = await fixture();
-    try {
-        for (const executor of ['codex', 'claude'] as const) {
-            const i = incoming(executor, `[${executor}] Task`), c = store.intake(i, 'raw', i.text);
-            c.executorSession = randomUUID(); store.save(c);
-            const tools = new AsyncTools(config, store, c, new AbortController().signal);
-            await assert.rejects(tools.call('foreign-session', 'grant_scope', {}), /PRIMARY_AGENT_ONLY/);
-            await assert.rejects(tools.call(c.executorSession, 'project_merge', { requestId: 'missing' }));
-            await assert.rejects(tools.call(c.executorSession, 'project_deploy', { requestId: 'missing' }));
-            const { mail, request } = store.queue(c, 'merge', 'Review exact revision.', { kind: 'merge', target: { project: 'example', head: 'a'.repeat(40), base: 'b'.repeat(40), pr: 1 } });
-            const reply = incoming(executor + '-reply', 'Re: task', '<delivered@example.test>'); reply.text = 'Merge this revision.';
-            // Distinct delivered identities per task.
-            mail.rfcMessageId = `<${executor}-delivered@example.test>`; mail.identityStatus = 'verified'; store.saveMail(mail);
-            reply.inReplyTo = mail.rfcMessageId; store.intake(reply, 'raw', reply.text);
-            assert.throws(() => store.authorize(c.id, request!.id, i.id, i.text), /BINDING/);
-            assert.equal(store.authorize(c.id, request!.id, reply.id, reply.text).sourceMailId, reply.id);
-            assert.throws(() => store.put('request', request!.id, { ...request, target: { head: 'changed' } }), /IMMUTABLE_CONFIRMATION_TARGET/);
-            let attempts = 0;
-            await assert.rejects(store.effect(c.id, 'uncertain', {}, async () => { attempts++; throw Error('uncertain'); }));
-            await assert.rejects(store.effect(c.id, 'uncertain', {}, async () => { attempts++; }), /UNCERTAIN/);
-            assert.equal(attempts, 1);
-        }
-    } finally { store.close(); }
-});
-
-test('Claude native tools/settings are disabled and only explicit bridge tools are allowed', async () => {
+test('Claude native tools run with fixed OS sandbox, no account MCP, settings, hooks or plugins', async () => {
     const { config, store } = await fixture();
     try {
         const options = claudeOptions(config, '/synthetic/claude');
-        assert.deepEqual(options.tools, []); assert.deepEqual(options.settingSources, []);
-        assert.equal(options.strictMcpConfig, true); assert.equal(options.permissionMode, 'dontAsk');
+        assert.deepEqual(options.tools, {type:'preset',preset:'claude_code'}); assert.deepEqual(options.settingSources, []);
+        assert.equal(options.strictMcpConfig, true); assert.equal(options.permissionMode, 'bypassPermissions');
         assert.equal(options.permissionPrompts, 'none'); assert.equal(options.env?.CLAUDE_CODE_SAFE_MODE, '1');
         assert.equal(options.env?.GITHUB_TOKEN, undefined); assert.equal(options.env?.ANTHROPIC_API_KEY, undefined);
-        assert.deepEqual(options.allowedTools, inventory); assert.equal(options.persistSession, true);
+        assert.equal(options.allowedTools, undefined);assert.equal(options.allowDangerouslySkipPermissions,true); assert.equal(options.persistSession, true);
     } finally { store.close(); }
 });
 
@@ -141,7 +115,7 @@ test('Claude final reply is immutable and resumes the same native session across
         await bridge.dispatch(store.conversation(c.id)!); await settle();
         assert.equal(native.calls[1].options.resume, session); assert.equal(store.mails().length, 2);
         assert.equal(executorOf(store.conversation(c.id)!), 'claude');
-        assert.ok(native.calls[1].options.systemPrompt.prompt.includes('primary Claude Code agent'));
+        assert.ok(native.calls[1].options.systemPrompt.append.includes('primary Claude Code agent'));
     } finally { await bridge.stop(); store.close(); }
 });
 
@@ -184,8 +158,8 @@ test('lost Claude acknowledgement reconciles native identity without replay; mis
     }
 });
 
-test('unexpected native tools fail closed before accepting input', async () => {
-    const { config, store } = await fixture(), native = fakeRuntime({ tools: [...inventory, 'Bash'] });
+test('unexpected inherited MCP tools fail closed before accepting input', async () => {
+    const { config, store } = await fixture(), native = fakeRuntime({ tools: [...inventory, 'mcp__foreign__read_mail'] });
     const c = store.intake(incoming('first'), 'raw', 'body');
     const client = new ClaudeClient(config, store, c, async () => { throw Error('must not call tools'); }, native.sdk, async () => '/synthetic/claude');
     client.on('fault', () => {});
@@ -196,7 +170,7 @@ test('unexpected native tools fail closed before accepting input', async () => {
     } finally { await client.close(); store.close(); }
 });
 
-test('interrupted accepted Claude work resumes without replaying mail or clearing grants and receipts', async () => {
+test('interrupted accepted Claude work waits for new mail without clearing historical records', async () => {
     const { root, config, store } = await fixture();
     const interrupted = fakeRuntime({ fail: true }), recovered = fakeRuntime();
     const c = store.intake(incoming('first'), 'raw', 'body');
@@ -208,12 +182,15 @@ test('interrupted accepted Claude work resumes without replaying mail or clearin
         recovered.messages.push(...interrupted.messages);
         bridge = new AsyncBridge(config, store, noMail, async (c, handler) => new ClaudeClient(config, store, c, handler, recovered.sdk, async () => '/synthetic/claude'), undefined, root);
         await bridge.dispatch(store.conversation(c.id)!); await settle();
-        assert.equal(recovered.calls.length, 1);
-        assert.match(recovered.messages.at(-1).message.content, /^Runtime reconnection/);
+        assert.equal(recovered.calls.length, 0);
+        assert.equal(store.conversation(c.id)!.error,'EXECUTION_INTERRUPTED_AWAITING_NEW_MAIL');
         assert.equal(store.inputs().length, 1); assert.equal(store.input('first')!.status, 'accepted');
         assert.equal(store.get<any[]>('scope', c.id)!.length, 1);
         assert.equal(store.get<any>('operation', c.id + ':effect')!.status, 'uncertain');
-        assert.equal(store.mails().filter(m => m.text === 'Synthetic final answer.').length, 1);
+        assert.equal(store.mails().filter(m => m.text === 'Synthetic final answer.').length, 0);
+        store.intake(incoming('next','Reply',incoming('first').rfcId),'','Continue');
+        await bridge.dispatch(store.conversation(c.id)!);await settle();
+        assert.equal(recovered.calls.length,1);assert.equal(store.mails().filter(m => m.text === 'Synthetic final answer.').length,1);
     } finally { await bridge.stop(); store.close(); }
 });
 

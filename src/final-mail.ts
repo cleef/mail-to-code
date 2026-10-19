@@ -9,10 +9,6 @@ export class FinalMail {
         const key = c.id + ':' + input.turnId;
         if (!this.store.get('final-turn', key)) this.store.put('final-turn', key, { conversationId: c.id, turnId: input.turnId, rootTurn: input.turnId });
     }
-    continuation(c: Conversation, previous: string, next: string) {
-        const eligible = this.store.get<{ rootTurn: string }>('final-turn', c.id + ':' + previous);
-        if (eligible && !this.store.get('turn-output', c.id + ':' + eligible.rootTurn)) this.store.put('final-turn', c.id + ':' + next, { ...eligible, conversationId: c.id, turnId: next });
-    }
     pending(c: Conversation) {
         return this.store.all<{ conversationId: string; turnId: string; rootTurn: string }>('final-turn').filter(value => value.conversationId === c.id && !this.store.get('turn-output', c.id + ':' + value.rootTurn) && !this.store.get('final-held', c.id + ':' + value.turnId));
     }
@@ -37,10 +33,6 @@ export class FinalMail {
         const text = selected.map(i => i.text).join('\n\n');
         if (!text.trim()) return;
         if (text.length > 50000) throw Error('FINAL_REPLY_TOO_LARGE');
-        if (eligible.rootTurn !== turn.id) {
-            const pending = this.store.get<any>('turn-confirmation', c.id + ':' + turn.id);
-            if (pending) this.store.put('turn-confirmation', c.id + ':' + eligible.rootTurn, pending);
-        }
         try {
             this.store.queueFinal(c, eligible.rootTurn, text, selected.map(i => i.id));
         } catch(error) {

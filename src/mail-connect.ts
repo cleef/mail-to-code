@@ -13,7 +13,7 @@ export function mailCodexEnvironment(home: string): NodeJS.ProcessEnv {
     return { ...shellEnvironment(), CODEX_HOME: home };
 }
 export async function checkSeparateHome(home: string) {
-    const coding = expand('~/.codex');
+    const coding = expand(process.env.CODEX_HOME || '~/.codex');
     const canonicalHome = await realpath(home).catch(() => resolve(home));
     const canonicalCoding = await realpath(coding).catch(() => coding);
     if (canonicalHome === canonicalCoding || canonicalHome.startsWith(canonicalCoding + '/') || canonicalCoding.startsWith(canonicalHome.endsWith('/')?canonicalHome:canonicalHome + '/'))
