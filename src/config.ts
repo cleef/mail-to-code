@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { z } from 'zod/v3';
 import {ProfileSchema} from './profile.js';
-import { OperationSchema, OperationIdSchema } from './operations.js';
+const OperationIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
+const OperationSchema = z.object({ description: z.string(), target: z.string(), effect: z.enum(['read', 'write']), script: z.string(), args: z.array(z.string()).default([]), timeoutSeconds: z.number().default(1800), reconcileScript: z.string().optional() }).strict();
 
 export const configDir = () => process.env.MAIL_TO_CODE_CONFIG_DIR || join(homedir(), '.config/mail-to-code');
 const command = z.object({ executable: z.string().min(1), args: z.array(z.string()), cwd: z.string().default('.') }).strict();
@@ -26,14 +27,9 @@ export const ConfigSchema = z.object({
   profiles:z.record(ProfileSchema).default({}),controllerRepository:z.string().default(''),protectedRepositories:z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/)).default([]),
   screenshotImage: z.string().default('localhost/mail-to-code-preview:1.63.0'),
   previewEnabled: z.boolean().default(true)
-}).strict().superRefine((config, ctx) => {
-  for (const [name, repo] of Object.entries(config.repositories)) {
-    const prerequisites = repo.deployment?.preDeployOperations || [];
-    if (new Set(prerequisites).size !== prerequisites.length || prerequisites.some(id => !repo.operations?.[id])) ctx.addIssue({ code: 'custom', path: ['repositories', name, 'deployment', 'preDeployOperations'], message: 'Unique configured operations are required' });
-  }
-});
+}).strict();
 export type Config = z.infer<typeof ConfigSchema>;
-export const expand = (path: string) => resolve(path.startsWith('~/') ? join(homedir(), path.slice(2)) : path);
+export const expand = (path: string) => resolve(path === '~' ? homedir() : path.startsWith('~/') ? join(homedir(), path.slice(2)) : path);
 export async function loadConfig(mailSetupOnly=false): Promise<Config> {
   const path = join(configDir(), 'config.json');
   await privateFile(path);
@@ -47,14 +43,6 @@ export async function loadConfig(mailSetupOnly=false): Promise<Config> {
   if (config.mailCodexHome) config.mailCodexHome = expand(config.mailCodexHome);
   for (const repo of Object.values(config.repositories)) { repo.path = expand(repo.path); if (repo.productDocs) repo.productDocs = expand(repo.productDocs); }
   if (config.githubTokenFile) config.githubTokenFile = expand(config.githubTokenFile);
-  if(!config.controllerRepository){
-    const {execute}=await import('./process.js');
-    const {fileURLToPath}=await import('node:url');
-    const root=fileURLToPath(new URL('../../',import.meta.url));
-    const remote=await execute('git',['remote','get-url','origin'],{cwd:root}).then(r=>r.stdout.trim(),()=> '');
-    config.controllerRepository=/^(?:git@github.com:|https:\/\/github.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?$/.exec(remote)?.[1]||'';
-    if(!config.controllerRepository)throw Error('Set controllerRepository when installing without a GitHub origin');
-  }
   return config;
 }
 export async function privateDir(path: string) { await mkdir(path, { recursive: true, mode: 0o700 }); await chmod(path, 0o700); }

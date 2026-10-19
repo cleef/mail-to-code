@@ -1,57 +1,29 @@
 # Configuration
 
-`config-templates/example.json` is a minimal template, without predefined repositories or deployment permissions. All paths, aliases and commands below are illustrative.
+Public templates are synthetic. Active configuration, mail login, native histories
+and runtime SQLite stay outside the checkout. Private directories use 700, files 600.
+`MAIL_TO_CODE_CONFIG_DIR` selects the configuration directory. `init` and guide init
+use exclusive creation and preserve existing edited guides.
 
-Templates are kept separate from active configuration in `~/.config/mail-to-code/`.
-`init` creates `config.json` and initializes the private `AGENTS.md` and `WORKFLOW.md`
-without overwriting edited guides. The official Gmail plugin uses an independent
-Codex home at `<configDir>/codex-mail/`, configurable with `mailCodexHome`. Run
-`mail-connect` on the service host to log in and connect Gmail via `/plugins`.
-Development keeps its existing Codex configuration and API key. Keep credentials
-outside the checkout. See the [README setup guide](../README.md#setup) for file
-roles, permissions and plugin connection steps.
+| Field | Native adapter behavior |
+| --- | --- |
+| engine | async-cli |
+| asyncMailOutput | assistant-final (new installs), or queue-mail |
+| projectsRoot | Writable discovery root, default ~/projects |
+| repositories | Explicit additional writable paths; GitHub, checks, operations and deployment definitions are reference facts only |
+| productDocs | Optional additional writable product records root |
+| profiles | Existing build/test/service configuration as reference, no automatic execution or checks receipt gate |
+| dataDir | Preserve existing runtime data path |
+| codexCommand / claudeCommand | Pinned CLI paths; default codex / claude through service PATH |
+| gmailAddress / ownerAddress | Different mailbox addresses; authenticated owner input only |
+| mailCodexHome | Independent Gmail login, default configDir/codex-mail |
+| pollSeconds / timeoutSeconds | Polling/turn limits |
+| githubTokenFile | Deprecated compatibility field; never loaded, masked from agents |
+| controllerRepository / protectedRepositories | Historical context only, no gateway authorization |
+| previewEnabled / screenshotImage | Legacy context only; agent runs its own preview/checks |
 
-For automatic async replies set `engine: "async-cli"` and explicitly set
-`asyncMailOutput: "assistant-final"`, then restart the service. New installs
-already use this output mode; an existing config that omits it still uses
-`queue-mail`. Switching output mode does not backfill historical final answers.
-The bridge adds the current task's writable `notes/mail-images/` directory and
-image rules to each new, resumed and recovery turn, including older Codex threads.
-The frozen `<dataDir>/artifacts/mail-images/` copies and mailbox credentials remain
-unavailable to native tools. Edited private guides are never overwritten.
-
-```json
-{
-  "gmailAddress": "agent@gmail.com",
-  "ownerAddress": "owner@example.com",
-  "projectsRoot": "~/projects",
-  "productDocs": "~/projects/documentation",
-  "repositories": {
-    "sample": {"path": "~/projects/sample", "github": "example-org/sample", "baseBranch": "main"}
-  },
-  "profiles": {
-    "sample": {
-      "kind": "generic",
-      "runtime": ["node"],
-      "install": [{"executable": "npm", "args": ["ci"], "cwd": "."}],
-      "build": [{"executable": "npm", "args": ["run", "build"], "cwd": "."}],
-      "checks": [{"executable": "npm", "args": ["test"], "cwd": "."}],
-      "preview": {"kind": "static", "mounts": [{"source": "dist", "destination": "."}], "paths": ["/"]}
-    }
-  }
-}
-```
-
-Profiles describe install/build/check steps, runtimes, package sources, preview mounts, routes, synthetic fixtures and optional pinned test containers. Async `project_checks` runs these checks in a sanitized worktree copy and applies each command's `env`; `image` and `services` enable isolated container tests. See [configured checks](project-checks.md) for readiness, receipts and old-session compatibility. Declare generated tracked files in `generatedFiles` if a deployment build must restore those outputs before verifying the exact approved source commit. Undeclared changes fail deployment.
-
-Profiles are inferred from immutable default-branch snapshots, or supplied explicitly in the private configuration. Explicit profiles are not overwritten by model proposals. Changed configuration requires fresh approval. The configured product document repository uses Markdown validation and is merged last when recording product evidence.
-
-Deployment is disabled by default. To enable it, configure a trusted repository-relative script, host, domain, remoteBase, healthPaths and argument list. Arguments may contain `{commit}`, `{release}`, `{host}`, `{domain}` and `{remoteBase}` placeholders. The script must match the original trusted baseline. Deployment still needs a separate latest confirmation.
-
-Async installations may add private `repositories.<project>.operations` and
-ordered `deployment.preDeployOperations`. These use trusted external scripts,
-not ordinary build profiles or arbitrary model shell commands. See
-[controlled operations](controlled-operations.md) for configuration, authorization,
-script results, existing-thread compatibility and uncertain-effect recovery.
-
-`controllerRepository` is inferred from the installation's GitHub origin unless explicitly supplied. `protectedRepositories` can preserve manual-only controller identities during transitions. Credentials must never appear in profiles or guides.
+Native Git, gh and SSH reuse the selected service user's login and configuration,
+including GH_TOKEN/GITHUB_TOKEN when supplied to development. The mail environment
+excludes them. Deploy settings do not automatically trigger prerequisites or deployment.
+Agent-interpreted confirmation is still required. Credentials belong in host auth
+stores/environment, not repository examples or profile command arguments.

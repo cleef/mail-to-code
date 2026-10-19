@@ -1,18 +1,28 @@
 # Validation
 
-Run `npm test` on Node 22. The suite uses synthetic repositories and mail transports. It covers sender authentication, routing, multi-repository scope, immutable baselines, approval/version/stage binding, independent checks, cancellation, restart recovery, uncertain effects, delivery identity, task memory, presentations, and offline configuration adoption.
+Run npm test under Node 22.13+ 22.x. Unit/integration fixtures are synthetic and
+cover authenticated identity, mail/RFC deduplication, immutable replies and images,
+uncertain sends/input acknowledgements, retained sessions, retired tools, fresh
+native contracts, interrupted work waiting for mail, and separate mail/development
+environments. Old gateway-only checks/tests/scripts were removed with their modules.
 
-`node scripts/verify-conversations.mjs --local-synthetic` exercises the v2 semantic contract through the real Codex CLI, without sending mail or running business adapters. It includes superseded approval plus pagination feedback, exact English status, negation, quotation and conditional authorization. The synthetic unit suite also covers communication repair, typed guard facts, phase decisions, stale observations, v6-to-v7 preservation and restart deduplication. `sandbox-probe.mjs` and `verify-reply.mjs --permissions` check development and reply isolation using private operator configuration.
+Run the matching-version real acceptance separately:
 
-Before deployment, rehearse migration on a WAL-consistent private database copy. Compare historical outbox/inbox, Gmail cursor, PRs, commits, worktrees and Codex contexts. Confirm that adoption queues planning only and that stale confirmations cannot execute. Test both pre-start restoration and database-compatible recovery. Keep live task content and acceptance reports private.
+```sh
+node scripts/verify-async-sandbox.mjs
+node scripts/verify-async-cli.mjs
+node scripts/verify-claude-cli.mjs
+```
 
-A real mailbox acceptance requires an authenticated request from the configured owner. Confirm intake, proposal, START, implementation, independent checks and Review. It does not authorize merge or deployment.
+The sandbox script probes both the direct Codex boundary and the exact whole-process
+Claude launch path with synthetic child code: project/Git writes, controlled local
+network, developer login configuration, forbidden mail/state/foreign task/outside
+writes. Model acceptance exercises native tools and original session continuity
+using synthetic projects and no real mailbox, PR, merge or deploy. Both binaries
+must match the pinned version. These checks are not part of routine npm test because
+they require host sandbox support and (for model turns) authenticated model access.
+Missing runtime support is reported, not replaced by mocks. Actual mail delivery
+still requires separate owner-mail acceptance.
 
-`node scripts/verify-discussions.mjs` checks autonomous pagination defaults, real
-privacy choices with recommendations, missing facts, confirmed document versions
-and explicit recommendation replies through the real Codex CLI. All inputs are
-synthetic; mail sending and business execution are forbidden. The unit suite
-checks shared prompts, option/reference validation, metadata propagation,
-separate discussion/authorization rendering and untouched historical snapshots.
-
-For pagination compatibility decisions, [AIP-158](https://google.aip.dev/158#backwards-compatibility) explains why changing an existing full-list response to a finite default changes old-client behavior. Inspect those assumptions before proposing adaptation and rollout.
+Record results, platform, exact versions and any missing runtime in the PR and
+[validation-native-passthrough.md](validation-native-passthrough.md).

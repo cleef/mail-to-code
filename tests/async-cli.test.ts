@@ -12,9 +12,7 @@ import { AsyncTools } from '../src/async-tools.js';
 import { denyInteractive, AppServer } from '../src/app-server.js';
 import type { Incoming } from '../src/types.js';
 import type { MailTransport } from '../src/delivery.js';
-import { git } from '../src/git.js';
 import { markdownHtml } from '../src/mail-markdown.js';
-import { Runner, codexPolicy } from '../src/runner.js';
 import { FinalMail } from '../src/final-mail.js';
 import { GmailError } from '../src/mail-transport.js';
 import { blockedMail, mailStatus } from '../src/mail-diagnostics.js';
@@ -76,7 +74,7 @@ test('new body and complete quoted history reach the same session without a busi
     for (const name of ['input', 'notes', 'worktrees'])
         assert.ok((await stat(join(f.root, 'async-cli', 'features', c.id, name))).isDirectory());
     assert.ok(start.params.dynamicTools.some((t: any) => t.name === 'queue_mail'));
-    assert.ok(start.params.dynamicTools.some((t: any) => t.name === 'project_checks'));
+    assert.deepEqual(start.params.dynamicTools.map((t: any)=>t.name), ['queue_mail']);
     assert.ok(!('outputSchema' in client.calls.find(c => c.method === 'turn/start')!.params));
     const second = { ...incoming('two', '采用推荐方案；暂不合并和部署'), inReplyTo: i.rfcId };
     const routed = f.store.intake(second, 'raw', '采用推荐方案；暂不合并和部署');
@@ -104,40 +102,6 @@ test('turn completion remains internal and reply resumes stored thread', async (
     f.store.close();
 });
 
-test('resumed, steered and recovery turns receive current operations without replacing history or mail evidence', async () => {
-    const f = await fixture(), path = join(f.config.projectsRoot, 'sample'), directory = join(f.root, 'private-operations');
-    await mkdir(path); await mkdir(directory, { mode: 0o700 }); await git(path, ['init', '-b', 'main']); await git(path, ['remote', 'add', 'origin', 'https://github.com/example-org/sample.git']);
-    const c = f.store.intake(incoming('one'), 'raw original', 'body'); await f.bridge.dispatch(c); await f.bridge.stop();
-    f.history.thread.turns.at(-1).status = 'completed';
-    f.config.engine = 'async-cli';
-    const script = join(directory, 'inspect'); await writeFile(script, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
-    const fresh = { ...f.config, repositories: { sample: { path, github: 'example-org/sample', baseBranch: 'main', mergeMethod: 'merge' as const, checks: [], operations: { inspect: { description: 'Inspect synthetic staging', target: 'sample-staging', effect: 'read' as const, script, args: [], timeoutSeconds: 30 } } } } };
-    f.store.put('scope', c.id, [{ path, identity: 'example-org/sample', role: 'modify' }]);
-    const resumed = new AsyncBridge(f.config, f.store, f.mail, f.bridge.factory, async () => fresh);
-    f.store.intake({ ...incoming('two', 'Recheck access'), inReplyTo: incoming('one').rfcId }, 'raw reply', 'Recheck access');
-    await resumed.dispatch(f.store.conversation(c.id)!);
-    const client = f.clients.at(-1)!;
-    assert.equal(client.calls.find(x => x.method === 'thread/resume')!.params.dynamicTools, undefined);
-    const sent = client.calls.find(x => x.method === 'turn/start')!.params.input[0].text;
-    assert.ok(sent.startsWith('MAIL_INPUT_ID=two\n')); assert.match(sent, /sample-staging/); assert.match(sent, /mail-to-code-operation/);
-    assert.match(sent, /mail-to-code-checks/);
-    assert.equal(f.store.input('two')!.incoming.text, 'Recheck access'); assert.equal(f.store.input('two')!.fullText, 'Recheck access');
-    client.history.thread.turns.at(-1).status = 'inProgress'; const current = f.store.conversation(c.id)!; current.activeTurn = client.history.thread.turns.at(-1).id; f.store.save(current);
-    f.store.intake({ ...incoming('three', 'Additional context'), inReplyTo: incoming('one').rfcId }, 'raw third', 'Additional context');
-    await resumed.dispatch(f.store.conversation(c.id)!);
-    assert.match(client.calls.find(x => x.method === 'turn/steer')!.params.input[0].text, /Controller operation context/);
-    assert.match(client.calls.find(x => x.method === 'turn/steer')!.params.input[0].text, /mail-to-code-checks/);
-    assert.equal(f.store.all('operation').length, 0); assert.equal(f.store.mails().length, 0);
-    assert.equal(f.store.conversation(c.id)!.codexThread, 'codex-thread');
-    client.history.thread.turns.at(-1).status = 'failed'; await resumed.stop();
-    const recovered = new AsyncBridge(f.config, f.store, f.mail, f.bridge.factory, async () => fresh);
-    await recovered.dispatch(f.store.conversation(c.id)!);
-    const recovery = f.clients.at(-1)!.calls.find(x => x.method === 'turn/start')!.params.input[0].text;
-    assert.match(recovery, /^Runtime reconnection/); assert.match(recovery, /Controller operation context/);
-    assert.match(recovery, /mail-to-code-checks/);
-    assert.equal(f.store.inputs().length, 3); assert.equal(f.store.all('request').length, 0);
-    await recovered.stop(); f.store.close();
-});
 test('duplicate inbound message never starts a duplicate turn', async () => {
     const f = await fixture(), c = f.store.intake(incoming('one'), 'raw', 'body');
     await f.bridge.dispatch(c);
@@ -184,7 +148,7 @@ test('unknown acknowledgement is an internal runtime issue, not another START em
     await f.bridge.stop();
     f.store.close();
 });
-test('interrupted turn continues in original session while preserving scope and uncertain receipts', async () => {
+test('interrupted turn waits for new mail while preserving native session and historical records', async () => {
     const f = await fixture(), c = f.store.intake(incoming('one'), 'raw', 'body');
     c.codexThread = 'codex-thread';
     c.activeTurn = 'old';
@@ -195,11 +159,31 @@ test('interrupted turn continues in original session while preserving scope and 
     f.history.thread.turns.push({ id: 'old', status: 'interrupted', items: [] });
     f.store.put('scope', c.id, [{ path: '/synthetic/repo', role: 'modify', identity: 'sample/repo' }]);
     await f.bridge.dispatch(c);
-    assert.equal(f.clients[0].calls.find(c => c.method === 'turn/start')!.params.threadId, 'codex-thread');
+    assert.equal(f.clients[0].calls.filter(c => c.method === 'turn/start').length, 0);
+    assert.equal(f.store.conversation(c.id)!.error,'EXECUTION_INTERRUPTED_AWAITING_NEW_MAIL');
+    f.store.intake({...incoming('next'),inReplyTo:incoming('one').rfcId},'','Continue');
+    await f.bridge.dispatch(f.store.conversation(c.id)!);
+    assert.equal(f.clients[0].calls.find(c => c.method === 'turn/start')!.params.threadId,'codex-thread');
     assert.equal(f.store.get<any[]>('scope', c.id)!.length, 1);
     assert.equal(f.store.mails().length, 0);
     await f.bridge.stop();
     f.store.close();
+});
+test('recovery holds unfinished or missing final replies without creating autonomous execution',async()=>{
+    for(const status of ['failed','interrupted','missing','completed']) {
+        const f=await fixture(false,true),c=f.store.intake(incoming('one'),'raw','body');
+        await f.bridge.dispatch(c);await f.bridge.stop();
+        const saved=f.store.conversation(c.id)!;delete saved.activeTurn;f.store.save(saved);
+        if(status==='missing')f.history.thread.turns=[];else f.history.thread.turns[0].status=status;
+        const client=new FakeClient(f.history),recovered=new AsyncBridge(f.config,f.store,f.mail,async()=>client,undefined,f.root);
+        try {
+            await recovered.dispatch(saved);await recovered.pump();
+            assert.equal(client.calls.filter(call=>call.method==='turn/start').length,0,status);
+            assert.equal(f.store.mails().length,0,status);
+            assert.equal(new FinalMail(f.store).pending(saved).length,0,status);
+            assert.equal(f.store.conversation(c.id)!.error,status==='completed'?'NATIVE_FINAL_REPLY_MISSING':'EXECUTION_INTERRUPTED_AWAITING_NEW_MAIL');
+        } finally {await recovered.stop();f.store.close();}
+    }
 });
 test('immutable outbox, deduplication and changed-key rejection', async () => {
     const f = await fixture(), c = f.store.intake(incoming('one'), 'raw', 'body'), a = f.store.queue(c, 'result', 'Result'), b = f.store.queue(c, 'result', 'Result');
@@ -297,36 +281,6 @@ test('only root agent may send a mail or record grants', async () => {
     assert.equal(f.store.mails().length, 0);
     f.store.close();
 });
-test('approval is bound to a delivered direct reply, exact new-body evidence and request', async () => {
-    const f = await fixture(), c = f.store.intake(incoming('one'), 'raw', 'body'), queued = f.store.queue(c, 'merge', 'Merge exact commit?', { kind: 'merge', target: { head: 'a'.repeat(40) } });
-    const m = queued.mail;
-    m.status = 'sent';
-    m.identityStatus = 'verified';
-    m.rfcMessageId = '<notice@example.test>';
-    f.store.saveMail(m);
-    const i = { ...incoming('two', 'Merge this reviewed commit; do not deploy'), inReplyTo: m.rfcMessageId };
-    f.store.intake(i, 'raw', 'body');
-    const r = f.store.authorize(c.id, queued.request!.id, i.id, 'Merge this reviewed commit');
-    assert.equal(r.sourceMailId, 'two');
-    assert.equal(r.kind, 'merge');
-    assert.throws(() => f.store.authorize(c.id, r.id, i.id, 'deploy now'), /EVIDENCE/);
-    const bad = { ...incoming('three', 'yes'), inReplyTo: '<other@example.test>', references: [incoming('one').rfcId] };
-    f.store.intake(bad, 'raw', 'body');
-    assert.throws(() => f.store.authorize(c.id, r.id, bad.id, 'yes'), /BINDING/);
-    f.store.close();
-});
-test('operation receipts return known result and stop uncertain or changed repetitions', async () => {
-    const f = await fixture();
-    let effects = 0;
-    assert.equal(await f.store.effect('c', 'merge', { head: 'a' }, async () => ++effects), 1);
-    assert.equal(await f.store.effect('c', 'merge', { head: 'a' }, async () => ++effects), 1);
-    assert.equal(effects, 1);
-    await assert.rejects(f.store.effect('c', 'merge', { head: 'b' }, async () => ++effects), /INPUT_MISMATCH/);
-    await assert.rejects(f.store.effect('c', 'deploy', {}, async () => { effects++; throw Error('lost'); }), /lost/);
-    await assert.rejects(f.store.effect('c', 'deploy', {}, async () => ++effects), /UNCERTAIN/);
-    assert.equal(effects, 2);
-    f.store.close();
-});
 test('old state imports read-only and paused without restoring approval or replaying snapshots', async () => {
     const f = await fixture(), path = join(f.root, 'legacy.sqlite'), old = new DatabaseSync(path);
     old.exec('CREATE TABLE sessions(id TEXT,data TEXT);CREATE TABLE outbox(id TEXT,data TEXT);');
@@ -371,55 +325,6 @@ test('runtime scheduler caps active primary conversations and an inspection exce
     assert.equal(clients.find(client => client.history.thread.id === first.id)!.closed, true);
     assert.equal(clients.length, 5);
     await bridge.stop();
-    f.store.close();
-});
-test('sandbox is projects-root read-only with only feature worktrees/notes writable and secret masks', async () => {
-    const f = await fixture(), c = f.store.intake(incoming('one'), 'raw', 'body');
-    await writeFile(join(f.config.dataDir, 'state.sqlite'), 'synthetic legacy state');
-    const policy = asyncPolicy(f.config, c).join('\n');
-    assert.ok(policy.includes(JSON.stringify(join(f.config.dataDir, 'state.sqlite')) + '="deny"'));
-    assert.ok(policy.includes(JSON.stringify(f.config.projectsRoot) + '="read"'));
-    assert.ok(policy.includes('**/.env'));
-    assert.ok(policy.includes('network.enabled=false'));
-    assert.ok(policy.includes('features.plugins=false'));
-    assert.ok(policy.includes('**/.env'));
-    assert.ok(!policy.includes(JSON.stringify(join(f.config.dataDir, 'state.sqlite-wal'))));
-    assert.ok(!policy.includes(JSON.stringify(join(f.config.projectsRoot, '.agents')) + '="read"'));
-    assert.ok(!policy.includes(JSON.stringify(join(f.config.projectsRoot, '.git')) + '="read"'));
-    f.store.close();
-});
-test('async masks collapse a token inside denied configuration but retain an external token', async () => {
-    const f = await fixture(), c = f.store.intake(incoming('masks'), 'raw', 'body');
-    const directory = join(f.root, 'config'), inside = join(directory, 'github-token'), outside = join(f.config.projectsRoot, 'config-sibling', 'github-token');
-    await mkdir(directory);
-    await mkdir(join(f.config.projectsRoot, 'config-sibling'));
-    await writeFile(inside, 'synthetic token');
-    await writeFile(outside, 'synthetic token');
-    const previous = process.env.MAIL_TO_CODE_CONFIG_DIR;
-    process.env.MAIL_TO_CODE_CONFIG_DIR = directory;
-    try {
-        f.config.githubTokenFile = inside;
-        let policy = asyncPolicy(f.config, c).join('\n');
-        assert.ok(policy.includes(JSON.stringify(directory) + '="deny"'));
-        assert.ok(!policy.includes(JSON.stringify(inside) + '="deny"'));
-        f.config.githubTokenFile = outside;
-        policy = asyncPolicy(f.config, c).join('\n');
-        assert.ok(policy.includes(JSON.stringify(outside) + '="deny"'));
-        assert.equal(configDir(), directory);
-    } finally {
-        if (previous === undefined) delete process.env.MAIL_TO_CODE_CONFIG_DIR;
-        else process.env.MAIL_TO_CODE_CONFIG_DIR = previous;
-        f.store.close();
-    }
-});
-test('complete policy keeps secret masks under reopened directories and future-file globs', async () => {
-    const f = await fixture(), parent = join(f.root, 'private'), tree = join(parent, 'task'), secret = join(tree, '.env'), nested = join(tree, 'secrets');
-    const rules = { [parent]: 'deny', [tree]: 'write', [secret]: 'deny', [nested]: 'deny', [join(nested, 'token')]: 'deny', [join(tree, '**/*.key')]: 'deny', [join(f.root, 'private-sibling', 'token')]: 'deny' };
-    const policy = codexPolicy(f.config, f.config.projectsRoot, 'plan', [], true, [], rules).join('\n');
-    for (const path of [parent, secret, nested, join(tree, '**/*.key'), join(f.root, 'private-sibling', 'token')])
-        assert.ok(policy.includes(JSON.stringify(path) + '="deny"'), path);
-    assert.ok(policy.includes(JSON.stringify(tree) + '="write"'));
-    assert.ok(!policy.includes(JSON.stringify(join(nested, 'token')) + '="deny"'));
     f.store.close();
 });
 test('startup failure preserves queued input and retries it once in the same conversation', async () => {
@@ -487,88 +392,6 @@ test('unresolved reply is quarantined without stalling other inbox messages or s
     f.store.close();
 });
 test('untrusted inbound messages cannot enter the runtime', async () => { const f = await fixture(); assert.throws(() => f.store.intake({ ...incoming('bad'), trusted: false }, 'raw', 'body'), /UNAUTHENTICATED/); f.store.close(); });
-test('initial scope is canonical and additional writable projects require a new bound scope request', async () => {
-    const f = await fixture(), paths = ['web', 'mini'];
-    for (const p of paths) {
-        const dir = join(f.config.projectsRoot, p);
-        await mkdir(dir);
-        await git(dir, ['init']);
-        await git(dir, ['remote', 'add', 'origin', `https://github.com/sample/${p}.git`]);
-    }
-    const c = f.store.intake(incoming('one', 'Implement web and mini'), 'raw', 'body');
-    c.codexThread = 'primary';
-    f.store.save(c);
-    const tools = new AsyncTools(f.config, f.store, c, new AbortController().signal);
-    const first = await tools.call('primary', 'grant_scope', { sourceMailId: 'one', evidence: 'Implement web', projects: [{ path: 'web', role: 'modify' }] }) as any[];
-    assert.equal(first[0].identity, 'sample/web');
-    await assert.rejects(tools.call('primary', 'grant_scope', { sourceMailId: 'one', evidence: 'Implement web', projects: [{ path: 'web', role: 'modify' }, { path: 'mini', role: 'modify' }] }), /SCOPE_CHANGE/);
-    assert.equal(tools.scopes().length, 1);
-    await tools.call('primary', 'grant_scope', { sourceMailId: 'one', evidence: 'Implement web', projects: [{ path: 'web', role: 'modify' }] });
-    assert.equal(tools.scopes().length, 1);
-    f.store.close();
-});
-test('operator project directory links resolve to canonical repositories without blocking normal project work', async () => {
-    const f = await fixture(), external = join(f.root, 'external-repository');
-    await mkdir(external);
-    await git(external, ['init']);
-    await git(external, ['remote', 'add', 'origin', 'https://github.com/sample/linked-project.git']);
-    await symlink(external, join(f.config.projectsRoot, 'linked-project'));
-    const c = f.store.intake(incoming('one', 'Implement the linked project'), 'raw', 'body');
-    c.codexThread = 'primary';
-    f.store.save(c);
-    const tools = new AsyncTools(f.config, f.store, c, new AbortController().signal);
-    const scope = await tools.call('primary', 'grant_scope', { sourceMailId: 'one', evidence: 'Implement the linked project', projects: [{ path: 'linked-project', role: 'modify' }] }) as any[];
-    assert.equal(scope[0].path, await realpath(external));
-    assert.equal(scope[0].identity, 'sample/linked-project');
-    const policy = asyncPolicy(f.config, c).join('\n');
-    assert.ok(policy.includes(JSON.stringify(await realpath(external)) + '="read"'));
-    f.store.close();
-});
-test('failed build preserves the approved scope and successful checks return verifiable current-source receipts', async () => {
-    const f = await fixture(), path = join(f.config.projectsRoot, 'web');
-    await mkdir(path);
-    await git(path, ['init', '-b', 'main']);
-    await git(path, ['config', 'user.name', 'Synthetic']);
-    await git(path, ['config', 'user.email', 'synthetic@example.test']);
-    await git(path, ['remote', 'add', 'origin', 'https://github.com/sample/web.git']);
-    await writeFile(join(path, 'source.ts'), 'const n: number = 1;');
-    await git(path, ['add', '.']);
-    await git(path, ['commit', '-m', 'Initial']);
-    f.config.repositories.web = { path, github: 'sample/web', baseBranch: 'main', mergeMethod: 'merge', checks: [{ executable: 'node', args: ['check.mjs'], cwd: '.' }] };
-    const c = f.store.intake(incoming('one'), 'raw', 'body');
-    c.codexThread = 'primary';
-    f.store.save(c);
-    const scope = [{ path, role: 'modify', identity: 'sample/web' }];
-    f.store.put('scope', c.id, scope);
-    f.store.put('project', c.id + ':' + path, { id: c.id + '-web', repo: 'web', worktree: path, baseSha: await git(path, ['rev-parse', 'HEAD']) });
-    const original = Runner.prototype.check;
-    let failing = true;
-    Runner.prototype.check = async (_tree, _command, _args, _cwd, _signal, _network, options) => {
-        assert.ok(options?.policy?.join('\n').includes('async-cli.sqlite'));
-        assert.ok(options?.policy?.join('\n').includes('**/.env'));
-        if (failing)
-            throw Object.assign(Error('PROCESS_FAILED:node:2'), { stdout: 'TS2339', stderr: '' });
-        return { stdout: 'passed', stderr: '' };
-    };
-    try {
-        const tools = new AsyncTools(f.config, f.store, c, new AbortController().signal), failure = await tools.call('primary', 'project_command', { project: 'web', executable: 'node', args: ['check.mjs'] }) as any;
-        assert.equal(failure.ok, false);
-        assert.equal(failure.stdout, 'TS2339');
-        assert.deepEqual(tools.scopes(), scope);
-        assert.equal(f.store.mails().length, 0);
-        failing = false;
-        const result = await tools.call('primary', 'project_command', { project: 'web', executable: 'node', args: ['check.mjs'] }) as any;
-        assert.equal(result.ok, true);
-        assert.ok(f.store.get<any>('check', result.checkId).ok);
-        await writeFile(join(path, 'source.ts'), 'const n: number = 2;');
-        await assert.rejects(tools.call('primary', 'project_pr', { project: 'web', summary: 'Result', checks: [result.checkId] }), /CURRENT_SOURCE_CHECK/);
-        await assert.rejects(tools.call('primary', 'project_merge', { requestId: 'missing' }), /AUTHORIZATION/);
-    }
-    finally {
-        Runner.prototype.check = original;
-        f.store.close();
-    }
-});
 test('Markdown mail renders recommendations and tables without executable HTML or URLs', () => {
     const html = markdownHtml('**推荐私有**\n| 方案 | 影响 |\n| --- | --- |\n| 私有 | 主动分享 |\n<script>alert(1)</script>\n[evil](javascript:alert)\n[docs](https://example.test/path)');
     assert.ok(html.includes('<table'));
@@ -640,28 +463,6 @@ test('lost final-turn acknowledgement recovers its original reply without execut
     await resumed.stop(); f.store.close();
 });
 
-test('old queue_mail prepares the final confirmation binding, never a second notification', async () => {
-    const f = await fixture(false, true), path = join(f.config.projectsRoot, 'sample');
-    await mkdir(path); await git(path, ['init', '-b', 'main']); await git(path, ['remote', 'add', 'origin', 'https://github.com/example-org/sample.git']);
-    const c = f.store.intake(incoming('confirm-one'), '', 'body'); await f.bridge.dispatch(c);
-    const turn = f.history.thread.turns[0], current = f.store.conversation(c.id)!;
-    const tools = new AsyncTools(f.config, f.store, current, new AbortController().signal, turn.id);
-    const request = { kind: 'scope', projects: [{ path: 'sample', role: 'modify' }] };
-    const prepared: any = await tools.call(current.codexThread!, 'request_confirmation', { key: 'scope-request', request });
-    const compat: any = await tools.call(current.codexThread!, 'queue_mail', { key: 'compat-request', text: 'Separate notification must not be sent', request });
-    assert.equal(prepared.requestId, compat.requestId); assert.equal(f.store.mails().length, 0);
-    assert.throws(() => f.store.authorize(c.id, prepared.requestId, 'confirm-one', 'Implement the scoped feature'), /REPLY_BINDING/);
-    turn.status = 'completed'; turn.items.push({ id: 'request-answer', type: 'agentMessage', phase: 'final_answer', text: '需要增加 Sample 项目的修改范围，请确认。' });
-    f.clients[0].emit('notification', 'turn/completed', { threadId: current.codexThread, turn });
-    const m = f.store.mails()[0]; assert.equal(f.store.mails().length, 1); assert.equal(m.text, '需要增加 Sample 项目的修改范围，请确认。');
-    m.identityStatus = 'verified'; m.rfcMessageId = '<request@example.test>'; f.store.saveMail(m);
-    const reply = { ...incoming('confirm-two', '确认按这个方案修改 Sample。'), inReplyTo: m.rfcMessageId };
-    f.store.intake(reply, '', reply.text);
-    assert.equal(f.store.authorize(c.id, prepared.requestId, reply.id, reply.text).mailId, m.id);
-    await assert.rejects(tools.call(current.codexThread!, 'request_confirmation', { key: 'different', request: { ...request, projects: [{ path: 'sample', role: 'reference' }] } }), /TARGET_CHANGED/);
-    await f.bridge.stop(); f.store.close();
-});
-
 test('production guide-loading path excludes legacy START workflow and refreshes resumed-turn transport', async () => {
     const f = await fixture(false, true);
     await writeFile(join(f.root, 'AGENTS.md'), 'Legacy-only START policy', { mode: 0o600 });
@@ -673,8 +474,8 @@ test('production guide-loading path excludes legacy START workflow and refreshes
     assert.ok(!options.developerInstructions.includes('Legacy-only'));
     assert.ok(!options.developerInstructions.includes('A final assistant message stays internal'));
     const input = f.clients[0].calls.find(x => x.method === 'turn/start')!.params.input[0].text;
-    assert.match(input, /Current controller transport: assistant-final/);
-    assert.match(input, /Explicit natural-language confirmation/);
+    assert.match(input, /Current mail transport: assistant-final/);
+    assert.match(input, /Merge and deployment require separate explicit user email confirmation/);
     await f.bridge.stop(); f.store.close();
 });
 
@@ -706,18 +507,48 @@ test('restart fills a completed native reply after local turn bookkeeping withou
     await resumed.stop(); f.store.close();
 });
 
-test('continuation preserves the prepared confirmation and commits one root-turn reply atomically', async () => {
-    const f = await fixture(false, true), c = f.store.intake(incoming('continued'), '', 'body');
+
+test('old operation tools are inert in retained sessions; final-mode mail ignores legacy request fields', async()=>{
+    const f=await fixture(false,true), c=f.store.intake(incoming('old'),'', 'body'); await f.bridge.dispatch(c);
+    const current=f.store.conversation(c.id)!, tools=new AsyncTools(f.config,f.store,current,new AbortController().signal);
+    assert.deepEqual(f.clients[0].calls.find(x=>x.method==='thread/start')!.params.dynamicTools,[]);
+    for(const name of ['grant_scope','record_authorization','request_confirmation','workspace_command','project_worktree','project_command','project_checks','project_sync_base','project_pr','project_merge','project_deploy','project_operation','project_operations','project_operation_status']) {
+        assert.equal((await tools.call(current.codexThread!,name,{executable:'must-not-execute',requestId:'old'} ) as any).error,'TOOL_RETIRED_USE_NATIVE');
+    }
+    await tools.call(current.codexThread!,'queue_mail',{key:'old',text:'ignored separate notice',request:{kind:'merge',target:{pr:1}}});
+    assert.equal(f.store.mails().length,0); assert.equal(f.store.all('request').length,0); assert.equal(f.store.all('operation').length,0); assert.equal(f.store.all('scope').length,0);
+    await f.bridge.stop();f.store.close();
+});
+
+test('mail merge/deploy dialogue reaches native session as ordinary input without program authorization',async()=>{
+    const f=await fixture(true,true), i=incoming('review','Please review synthetic PR 7; do not merge or deploy.'), c=f.store.intake(i,'',i.text);
     await f.bridge.dispatch(c);
-    const root = f.history.thread.turns[0].id, final = new FinalMail(f.store);
-    final.continuation(c, root, 'continued-turn');
-    const prepared = f.store.prepareConfirmation(c, 'continued-turn', 'scope-key', { kind: 'scope', target: { projects: [{ path: f.config.projectsRoot, role: 'modify', identity: 'example-org/sample' }] } });
-    const turn = { id: 'continued-turn', status: 'completed', items: [{ id: 'continued-answer', type: 'agentMessage', phase: 'final_answer', text: '请确认增加项目修改范围。' }] };
-    assert.throws(() => f.store.transaction(() => { final.complete(c, turn); throw Error('synthetic crash before commit'); }), /synthetic crash/);
-    assert.equal(f.store.mails().length, 0);
-    final.complete(c, turn); final.complete(c, turn);
-    assert.equal(f.store.mails().length, 1);
-    assert.equal(f.store.get<any>('request', prepared.id).mailId, f.store.mails()[0].id);
-    assert.equal(final.pending(c).length, 0);
-    await f.bridge.stop(); f.store.close();
+    for(const [id,text] of [['merge','Confirm merging synthetic PR 7 only. Do not deploy.'],['deploy','Confirm deploying the synthetic test target.']]) {
+        f.store.intake({...incoming(id,text),inReplyTo:i.rfcId},'',text);await f.bridge.dispatch(f.store.conversation(c.id)!);
+    }
+    const inputs=f.clients.flatMap(c=>c.calls.filter(x=>x.method==='turn/start').map(x=>x.params.input[0].text));
+    assert.equal(inputs.length,3);assert.match(inputs[1],/Confirm merging synthetic PR 7 only/);assert.match(inputs[2],/Confirm deploying the synthetic test target/);
+    for(const input of inputs) assert.match(input,/not program-enforced gates/);
+    assert.equal(f.store.all('request').length,0);assert.equal(f.store.all('operation').length,0);
+    assert.equal(f.store.mails().length,3);await f.bridge.stop();f.store.close();
+});
+
+test('new contract and inert configuration refresh on resumed and steered mail without replay',async()=>{
+    const f=await fixture(), c=f.store.intake(incoming('one'),'','body');await f.bridge.dispatch(c);await f.bridge.stop();f.history.thread.turns[0].status='completed';
+    const fresh={...f.config,repositories:{sample:{path:f.config.projectsRoot,github:'example-org/sample',baseBranch:'main',mergeMethod:'merge' as const,checks:[],operations:{inspect:{description:'Synthetic inspection',target:'synthetic-target',effect:'read' as const,script:'/synthetic/inspect',args:[],timeoutSeconds:30}}}}};
+    const bridge=new AsyncBridge(f.config,f.store,f.mail,f.bridge.factory,async()=>fresh, f.root);
+    try {
+        f.store.intake({...incoming('two'),inReplyTo:incoming('one').rfcId},'','body');await bridge.dispatch(f.store.conversation(c.id)!);
+        f.store.intake({...incoming('three'),inReplyTo:incoming('one').rfcId},'','body');await bridge.dispatch(f.store.conversation(c.id)!);
+        const client=f.clients.at(-1)!;assert.equal(client.calls.find(x=>x.method==='thread/resume')!.params.dynamicTools,undefined);
+        for(const method of ['turn/start','turn/steer']) {const text=client.calls.find(x=>x.method===method)!.params.input[0].text;assert.match(text,/synthetic-target/);assert.match(text,/reference facts only/);assert.match(text,/supersedes older/);}
+        assert.equal(f.store.all('operation').length,0);
+    } finally {await bridge.stop();f.store.close();}
+});
+
+test('final output transaction survives rollback and queues a single immutable reply',async()=>{
+    const f=await fixture(false,true),c=f.store.intake(incoming('atomic'),'','body');await f.bridge.dispatch(c);const final=new FinalMail(f.store),turn={id:f.history.thread.turns[0].id,status:'completed',items:[{id:'answer',type:'agentMessage',phase:'final_answer',text:'Synthetic complete.'}]};
+    assert.throws(()=>f.store.transaction(()=>{final.complete(c,turn);throw Error('rollback');}),/rollback/);assert.equal(f.store.mails().length,0);
+    final.complete(c,turn);final.complete(c,turn);assert.equal(f.store.mails().length,1);assert.equal(final.pending(c).length,0);
+    await f.bridge.stop();f.store.close();
 });

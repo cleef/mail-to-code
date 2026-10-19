@@ -2,7 +2,7 @@ import { readdirSync, realpathSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Config } from './config.js';
 // Directory links deliberately installed by the operator are project locations,
-// not textual aliases. Authorization always binds the canonical Git identity.
+// not textual aliases. The sandbox opens both the link and its canonical directory.
 export function projectLocations(config: Config) {
     const locations: {
         entry: string;

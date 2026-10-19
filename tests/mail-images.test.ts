@@ -86,13 +86,11 @@ test('old queue_mail tool imports images without new tools or project/controller
         assert.equal(f.store.mails().length,1);assert.deepEqual(readFileSync(m.attachments[0].path),f.png);
     }finally{f.close();}
 });
-test('image confirmation and reply parent freeze before later inputs; altered frozen files never attempt sending',async()=>{
+test('image snapshot and reply parent freeze before later inputs; altered frozen files never attempt sending',async()=>{
     const f=fixture();let bridge:AsyncBridge|undefined;try{
-        const {mail:m,request:r}=f.store.queue(f.c,'approval','![Preview](<mail-images/预览.png>)',{kind:'scope',target:{projects:['sample']}});
-        assert.throws(()=>f.store.put('request',r!.id,{...r,target:{projects:['other']}}),/IMMUTABLE/);
+        const {mail:m}=f.store.queue(f.c,'preview','![Preview](<mail-images/预览.png>)');
         f.store.intake({id:'later',threadId:'provider-thread',rfcId:'<later@example.test>',inReplyTo:'<parent@example.test>',subject:f.c.subject,text:'Later input',from:f.config.ownerAddress,trusted:true},'','');
         assert.equal(f.store.mail(m.id)?.replySourceId,'parent');
-        assert.throws(()=>f.store.authorize(f.c.id,r!.id,'later','Later input'),/APPROVAL_REPLY_BINDING_REQUIRED/);
         let sends=0;
         const transport={send:async()=>{sends++;throw Error('SEND_DISABLED');},search:async()=>[],read:async()=>{throw Error('READ_DISABLED');},profile:async()=>({emailAddress:f.config.gmailAddress})};
         bridge=new AsyncBridge(f.config,f.store,transport,async()=>{throw Error('MODEL_DISABLED');});
