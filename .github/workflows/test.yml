@@ -13,7 +13,7 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm test
-  project-checks-integration:
+  native-sandbox-integration:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -24,34 +24,18 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm run build
-      - name: Prepare sandbox and isolated test images
+      - name: Prepare pinned native CLIs and Linux sandbox
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman
-          # Ephemeral CI VM: permit the user namespaces required by both OS
-          # sandboxes and rootless Podman. No service-host policy is changed.
+          sudo apt-get install -y bubblewrap gh
+          # Ephemeral CI VM only. No service-host policy is changed.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          npm install --global @openai/codex@0.159.2
-          # setup-node uses /opt, outside the existing minimal filesystem policy.
-          # Prepare the public tools under an allowed system path; keep the
-          # sandbox unchanged rather than exposing the hosted tool cache.
-          sudo cp -a "$(dirname "$(dirname "$(command -v node)")")" /usr/local/mail-check-node
-          echo /usr/local/mail-check-node/bin >> "$GITHUB_PATH"
-          podman pull mcr.microsoft.com/playwright:v1.63.0-noble
-          podman pull docker.io/library/mysql:8.4
-          echo "CHECKS_BROWSER_IMAGE=$(podman image inspect mcr.microsoft.com/playwright:v1.63.0-noble --format '{{index .RepoDigests 0}}')" >> "$GITHUB_ENV"
-          echo "CHECKS_MYSQL_IMAGE=$(podman image inspect docker.io/library/mysql:8.4 --format '{{index .RepoDigests 0}}')" >> "$GITHUB_ENV"
-      - name: Run real sandbox, MySQL and Chromium acceptance
-        run: node scripts/verify-project-checks.mjs
-      - name: Diagnose synthetic container lifecycle failures
-        if: failure()
-        run: |
-          podman info --format=json
-          podman pod ps
-          podman volume ls
-          ps -eo uid,pid,ppid,state,comm
-          for container in $(podman ps -aq --filter name=mail-to-code-)
-          do
-            podman inspect --format '{{.Name}} {{.State.Status}} {{.State.Pid}} {{.State.Error}}' "$container"
-            podman logs --tail 100 "$container" || true
-          done
+          npm install --prefix "$RUNNER_TEMP/native-cli" --no-audit --no-fund @openai/codex@0.159.2 @anthropic-ai/claude-code@2.1.296
+          echo "$RUNNER_TEMP/native-cli/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Verify native filesystem, Git, gh and local network boundaries
+        # Synthetic child-process probes, no model login, mail or real external effects.
+        run: node scripts/verify-async-sandbox.mjs | tee "$RUNNER_TEMP/native-sandbox-report.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-sandbox-report-${{ github.event_name }}
+          path: ${{ runner.temp }}/native-sandbox-report.json
