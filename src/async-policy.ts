@@ -1,5 +1,5 @@
 import { join, dirname, resolve, delimiter } from 'node:path';
-import { existsSync, realpathSync, mkdirSync, writeFileSync, readFileSync, accessSync, constants } from 'node:fs';
+import { existsSync, realpathSync, mkdirSync, writeFileSync, readFileSync, accessSync, statSync, constants } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expand, configDir, type Config } from './config.js';
 import type { Conversation } from './async-store.js';
@@ -121,6 +121,15 @@ export function nativeFilesystem(config: Config, c: Conversation, executable?: s
     if (existsSync(join(installationRoot,'.git'))) entries[canonical(join(installationRoot,'.git'))] = 'read';
     // Linux's pinned mount helper cannot construct absent exact masks.
     for (const [path] of Object.entries(entries)) if (path.startsWith('/') && !/[?*\[{}]/.test(path) && !existsSync(path)) delete entries[path];
+    // The pinned Linux helper assumes writable roots are directories and adds
+    // metadata masks even beneath session files and SSH sockets. Explicit child
+    // rules suppress those impossible masks without exposing their parent dirs.
+    // These paths cannot exist beneath a file/socket and are never mounted.
+    if (process.platform === 'linux') for (const [path, access] of Object.entries(entries)) {
+        if (access === 'write' && path.startsWith('/') && existsSync(path) && !statSync(path).isDirectory()) {
+            for (const name of ['.git', '.agents', '.codex', '.aws']) entries[join(path, name)] = 'write';
+        }
+    }
     return entries;
 }
 export function asyncPolicy(config: Config, c: Conversation, executable?: string) {
