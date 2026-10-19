@@ -1,5 +1,9 @@
 # Native passthrough validation
 
+This is the original PR 24 record. The subsequent deployment-blocking Claude
+startup fix and completed matching-version model acceptance are recorded in
+[Claude startup validation](validation-claude-startup.md).
+
 Recorded 2026-10-19. All fixtures use synthetic repositories, mail, authentication
 values and PR/deployment targets. No real mailbox, business project, merge or
 deployment was used. The running adapter was not upgraded or restarted.

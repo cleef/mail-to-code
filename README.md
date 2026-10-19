@@ -90,12 +90,14 @@ and rechecks of current targets; the previous TOCTOU/evidence guarantees are gon
 ```sh
 npm test
 node scripts/verify-async-sandbox.mjs
+node scripts/verify-claude-startup.mjs
 node scripts/verify-async-cli.mjs
 node scripts/verify-claude-cli.mjs
 ```
 
 All tests/acceptance fixtures are synthetic. Real CLI acceptance requires matching
-pinned versions and model authentication; it never connects a real mailbox or
+pinned versions; the startup probe sends no model input and needs no model login.
+The multi-turn scripts require model authentication; acceptance never connects a real mailbox or
 merges/deploys a real project. Missing runtime support is a failed/unavailable
 acceptance result, never replaced by mock evidence. See [validation](docs/validation.md).
 
