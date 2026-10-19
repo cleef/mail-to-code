@@ -46,7 +46,8 @@ private `config.json` in `~/.config/mail-to-code/` (override with absolute
 `repositories` paths. Native development reuses host Git config, gh login and SSH;
 `githubTokenFile` is deprecated and never loaded. Configuration and runtime data
 must remain private and outside the checkout. The running adapter checkout is
-read-only to agents; use a separate worktree for changes to it.
+read-only to agents, including its Git metadata. Use a separate development clone
+and isolated worktree for changes to the adapter.
 
 ```sh
 node dist/src/cli.js mail-connect --device-auth

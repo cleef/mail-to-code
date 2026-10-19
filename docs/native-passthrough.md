@@ -37,3 +37,7 @@ mail reconciliation remain available and retain immutable snapshots.
 
 This implementation is delivered for PR review only; no runtime switch, service
 upgrade, real merge or deployment is performed as part of its tests.
+
+For future adapter development, use a separate clone and isolated worktree. A
+worktree sharing Git metadata with the protected live installation cannot assume
+that its Git metadata is writable.
