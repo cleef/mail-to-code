@@ -467,7 +467,7 @@ test('production guide-loading path excludes legacy START workflow and refreshes
     const f = await fixture(false, true);
     await writeFile(join(f.root, 'AGENTS.md'), 'Legacy-only START policy', { mode: 0o600 });
     await writeFile(join(f.root, 'WORKFLOW.md'), 'Legacy-only Review policy', { mode: 0o600 });
-    await writeFile(join(f.root, 'ASYNC_AGENTS.md'), 'Write concise natural replies. Preserve synthetic product convention.', { mode: 0o600 });
+    await writeFile(join(f.root, 'ASYNC_AGENTS.md'), 'Write concise natural replies. Preserve synthetic product convention. Legacy rule: merge and deployment must use separate email rounds.', { mode: 0o600 });
     const c = f.store.intake(incoming('guide-one'), '', 'body'); await f.bridge.dispatch(c);
     const options = f.clients[0].calls.find(x => x.method === 'thread/start')!.params;
     assert.match(options.developerInstructions, /Preserve synthetic product convention/);
@@ -475,7 +475,13 @@ test('production guide-loading path excludes legacy START workflow and refreshes
     assert.ok(!options.developerInstructions.includes('A final assistant message stays internal'));
     const input = f.clients[0].calls.find(x => x.method === 'turn/start')!.params.input[0].text;
     assert.match(input, /Current mail transport: assistant-final/);
-    assert.match(input, /Merge and deployment require separate explicit user email confirmation/);
+    assert.match(input, /Merge and deployment each require explicit user email authorization/);
+    assert.match(input, /The user may authorize both in the same new email; separate email rounds are not required/);
+    assert.match(input, /Merge-only authorization never authorizes deployment/);
+    assert.match(input, /If merging automatically deploys, obtain deployment authorization before merging/);
+    assert.match(input, /Ask for renewed confirmation if the authorized scope or deployment conditions materially change/);
+    assert.match(input, /supersedes older private-guide and conversation instructions about[^\n]+mandatory separate email rounds for merge and deployment/);
+    assert.ok(input.indexOf('Legacy rule:') < input.indexOf('The user may authorize both'));
     await f.bridge.stop(); f.store.close();
 });
 
@@ -520,18 +526,33 @@ test('old operation tools are inert in retained sessions; final-mode mail ignore
     await f.bridge.stop();f.store.close();
 });
 
-test('mail merge/deploy dialogue reaches native session as ordinary input without program authorization',async()=>{
-    const f=await fixture(true,true), i=incoming('review','Please review synthetic PR 7; do not merge or deploy.'), c=f.store.intake(i,'',i.text);
-    await f.bridge.dispatch(c);
-    for(const [id,text] of [['merge','Confirm merging synthetic PR 7 only. Do not deploy.'],['deploy','Confirm deploying the synthetic test target.']]) {
-        f.store.intake({...incoming(id,text),inReplyTo:i.rfcId},'',text);await f.bridge.dispatch(f.store.conversation(c.id)!);
+for (const finalMode of [false, true]) for (const combined of [false, true]) {
+test(`${finalMode ? 'final' : 'queue'} mail passes ${combined ? 'combined' : 'split'} merge/deploy authorization to the native session without program authorization`,async()=>{
+    const f=await fixture(true,finalMode), i=incoming('review','Please review synthetic PR 7; do not merge or deploy.'), c=f.store.intake(i,'',i.text);
+    const replies = combined
+        ? [['both', 'Confirm merging synthetic PR 7 and, after required checks succeed, deploying its corresponding version to the synthetic staging environment.']]
+        : [['merge', 'Confirm merging synthetic PR 7 only. Do not deploy.'], ['deploy', 'Confirm deploying the synthetic test target.']];
+    try {
+        await f.bridge.dispatch(c);
+        for(const [id,text] of replies) {
+            f.store.intake({...incoming(id,text),inReplyTo:i.rfcId},'',text);await f.bridge.dispatch(f.store.conversation(c.id)!);
+        }
+        const inputs=f.clients.flatMap(c=>c.calls.filter(x=>x.method==='turn/start').map(x=>x.params.input[0].text));
+        assert.equal(inputs.length, replies.length + 1);
+        for (const [index, [, text]] of replies.entries()) assert.ok(inputs[index + 1].includes(`New body:\n${text}\n`));
+        for(const input of inputs) {
+            assert.match(input,/not program-enforced gates/);
+            assert.match(input,/The user may authorize both in the same new email; separate email rounds are not required/);
+            assert.match(input,/With both authorized, merge and complete the required checks before deploying the corresponding version to the confirmed environment/);
+            assert.match(input,/Never treat implementation approval, generic assent or quoted text as merge\/deployment permission/);
+        }
+        assert.equal(f.store.all('request').length,0);assert.equal(f.store.all('operation').length,0);
+        assert.equal(f.store.mails().length,finalMode ? inputs.length : 0);
+    } finally {
+        await f.bridge.stop();f.store.close();
     }
-    const inputs=f.clients.flatMap(c=>c.calls.filter(x=>x.method==='turn/start').map(x=>x.params.input[0].text));
-    assert.equal(inputs.length,3);assert.match(inputs[1],/Confirm merging synthetic PR 7 only/);assert.match(inputs[2],/Confirm deploying the synthetic test target/);
-    for(const input of inputs) assert.match(input,/not program-enforced gates/);
-    assert.equal(f.store.all('request').length,0);assert.equal(f.store.all('operation').length,0);
-    assert.equal(f.store.mails().length,3);await f.bridge.stop();f.store.close();
 });
+}
 
 test('new contract and inert configuration refresh on resumed and steered mail without replay',async()=>{
     const f=await fixture(), c=f.store.intake(incoming('one'),'','body');await f.bridge.dispatch(c);await f.bridge.stop();f.history.thread.turns[0].status='completed';
