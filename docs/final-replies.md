@@ -5,8 +5,10 @@ final reply. Commentary/tool logs remain internal. In queue-mail mode, the prima
 session calls queue_mail with key/text; reusing a key with different text fails.
 There is no business authorization request field. Old schemas' request fields are
 ignored for compatibility and create no authorization records. Old operation tools
-return a retirement message. Questions and separate merge/deploy confirmations are
-ordinary prose interpreted by the agent from new email, with no hashes/evidence gates.
+return a retirement message. Questions and explicit authorization for each merge/deploy
+action are ordinary prose interpreted by the agent from new email, with no
+hashes/evidence gates. Both actions may be authorized in one new email; merge-only
+approval does not authorize deployment.
 
 Historical turns are not backfilled. Lost input acknowledgement is checked against
 exact persisted input identity; a missing match stays ambiguous. A completed final

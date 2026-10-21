@@ -6,8 +6,8 @@ A self-hosted mail adapter for persistent native **Codex / Claude Code** session
 file, shell, Git, gh, HTTP and SSH tools in a fixed OS sandbox. It creates worktrees,
 runs checks, opens PRs and interprets user confirmations. There is no operation
 gateway, project scope registry, authorization evidence or target hash binding.
-Merge and deployment still need separate explicit user email confirmation; this
-is an agent responsibility, not a program-enforced gate.
+Merge and deployment each need explicit user email authorization; both may be
+authorized in one new email. This is an agent responsibility, not a program-enforced gate.
 
 ## Mail interaction
 
@@ -25,12 +25,17 @@ synthetic repository `example-org/demo`:
 | New subject `[claude] Improve the form` | Implement the form change in demo, run checks and open a PR for my review. |
 | Reply requesting status | Read the current GitHub status and checks for PR #7. |
 | Reply after reviewing the PR | I have reviewed PR #7. Verify its current head and checks, then merge it. |
-| Separate deployment reply | Deploy demo's version merged from PR #7 to its staging environment. |
+| Later deployment reply, if only merge was authorized | Deploy demo's version merged from PR #7 to its staging environment. |
+| Alternatively, one reply authorizing both | I have reviewed PR #7. Merge it and, after required checks succeed, deploy the corresponding version to demo's staging environment. |
 
 Each confirmation names its action and target. Approval to implement a change
-does not approve merging or deploying it. The agent reads current state and
-interprets the new message; the adapter does not require scope grants or a special
-confirmation syntax. Native GitHub queries use the service user's `gh` login.
+does not approve merging or deploying it; merge-only approval does not permit deployment.
+The agent checks current PR, checks, production state and deployment triggers before
+acting. If merging automatically deploys, deployment authorization is needed before
+merging. Material changes to the authorized scope or deployment conditions require
+renewed confirmation. The agent interprets the new message; the adapter does not
+require scope grants or a special confirmation syntax. Native GitHub queries use
+the service user's `gh` login.
 
 Set `asyncMailOutput` to `assistant-final` for native final replies (the default
 for new installs). Commentary and tool logs stay internal. `queue-mail` exposes

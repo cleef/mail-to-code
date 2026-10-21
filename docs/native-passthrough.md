@@ -4,8 +4,11 @@ This change removes controller operation dispatch, scope grants, authorization
 requests/evidence, target fingerprints, operation receipts, PR checks credentials
 and automatic deployment prerequisites. The agent owns native development and
 external effects. The hard boundaries are authenticated mail identity and OS sandbox;
-mail integrity/reliability is retained. Separate merge/deployment confirmation is
-an agent instruction. No program prevents a model from misunderstanding a target
+mail integrity/reliability is retained. Explicit authorization for each merge and
+deployment is an agent instruction; both may be authorized in one new email.
+Merge-only approval does not authorize deployment, including deployment triggered
+automatically by a merge. Material changes to scope or deployment conditions
+require renewed confirmation. No program prevents a model from misunderstanding a target
 or a stale confirmation; the old TOCTOU guarantee is deliberately removed.
 
 ## Operator procedure after review

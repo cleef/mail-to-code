@@ -46,5 +46,6 @@ credentials. Native outbound networking is enabled; local test networking is che
 by synthetic acceptance. Sandbox failures stop execution and never request scope.
 
 Native questions are declined with an instruction to write the question in the final
-email and end the turn. The agent interprets merge/deployment confirmation in the next
-mail itself. This mode deliberately removes all deterministic business-operation gates.
+email and end the turn. The agent interprets explicit authorization for each merge
+and deployment from new mail itself; both may be authorized in the same email.
+This mode deliberately removes all deterministic business-operation gates.

@@ -11,11 +11,17 @@ Ask missing decisions in ordinary prose in the final reply, finish the turn and
 wait for the next email. No START keyword, scope grant, operation tool, target hash
 or evidence request is needed. Sandbox denials do not authorize escaping isolation.
 
-The agent owns Git, gh, SSH and external actions. Obtain separate explicit user
-email confirmation for merge and deployment after explaining the concrete action.
-Recheck current state. Implementation approval and quoted assent do not authorize
-merge or deployment. Never blindly retry an unknown external outcome; inspect it
-first and ask when it cannot be established. Keep private configuration out of Git.
+The agent owns Git, gh, SSH and external actions. Explain concrete actions and
+targets, then obtain explicit user email authorization for each merge and deployment.
+Both may be authorized in one new email; separate email rounds are not required.
+Merge-only approval does not authorize deployment. With both authorized, merge and
+complete required checks before deploying the corresponding version to the confirmed
+environment. Recheck current PR, checks, production state and deployment triggers.
+If merging automatically deploys, obtain deployment authorization before merging.
+Ask for renewed confirmation if scope or deployment conditions materially change.
+Implementation approval, generic assent and quoted assent do not authorize merge
+or deployment. Never blindly retry an unknown external outcome; inspect it first
+and ask when it cannot be established. Keep private configuration out of Git.
 
 Use the configured mail output mode: assistant-final delivers the final reply;
 queue-mail requires a single explicit queue_mail for a question, requested status,

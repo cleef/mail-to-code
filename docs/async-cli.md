@@ -15,7 +15,12 @@ scope, START, operation, hash and evidence instructions. No historical input is 
 The adapter does not run checks, Git, PR, merge, deploy or configured operation scripts.
 Repositories, profiles and deployment definitions are reference facts. Native agents
 perform the work using host development login inside the static sandbox. Merge and
-deployment each need agent-interpreted explicit user email confirmation.
+deployment each need agent-interpreted explicit user email authorization. Both may
+be authorized in one new email. Merge-only approval does not permit deployment.
+With both authorized, merge and complete required checks before deploying the
+corresponding version to the confirmed environment. Inspect deployment triggers
+before merging; automatic deployment requires deployment authorization before merge.
+Material changes to scope or deployment conditions require renewed confirmation.
 
 After restart, the adapter checks native history for acknowledged input and completed
 final replies. Missing acknowledgement evidence remains ambiguous and blocks replay.
